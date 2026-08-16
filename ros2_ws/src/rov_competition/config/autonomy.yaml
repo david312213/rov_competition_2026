@@ -1,0 +1,122 @@
+# ROV 自主抓取候选版 0.2.0rc1
+#
+# 现场人员优先只调 field_tuning。这些初值是“待水池标定的起点”，
+# 不是实艇已验证结论。标定完成前，真实自主启动会明确拒绝。
+
+field_tuning:
+  # 状态1：从按下“开始”时的真实深度继续下潜 0.30 m。
+  descent_delta_m: 0.30
+  descent_tolerance_m: 0.05
+
+  # 状态3：没有 DVL，只能用已测平均速度估算时间。当前为
+  # 0.40 / 0.30 = 1.33 s。三项必须在同一电池、负载和水况下标定。
+  advance_target_distance_m: 0.40
+  advance_estimated_speed_mps: 0.30
+  advance_forward_command: 0.05
+
+  # 状态4：抓取瞄准点，用画面宽高比例表示。
+  grasp_aim_x_ratio: 0.50
+  grasp_aim_y_ratio: 0.70
+
+  # 摄像头和推进器方向必须实测。null 是安全锁，不会被猜成 +1。
+  image_yaw_sign: null
+  image_vertical_sign: null
+
+  # 0.30 m/s 只是期望记录，不参与无 DVL 条件下的闭环。
+  # 真正发送给网关的仍是无量纲指令 0.05。
+  approach_forward_command: 0.05
+  desired_approach_speed_mps: 0.30
+
+  # 框面积 / 整帧面积，各类目标必须在水池中独立标定。
+  grasp_area_ratio:
+    echinus: 0.18
+    holothurian: 0.18
+    scallop: 0.18
+    starfish: 0.18
+  grasp_area_confirmation_frames: 3
+
+  # 完成或无目标退出时，上升到这个绝对深度再结束。
+  recovery_depth_m: 0.30
+
+  calibration:
+    horizontal_motion_confirmed: false
+    image_control_confirmed: false
+    grasp_thresholds_confirmed: false
+
+detector:
+  model_path: "../models/seafood_yolo26x.pt"
+  expected_sha256: "300eb3d98ae586c1c5b26b87b3a1baf6450bf6ef367acad4fc5129622ce20a23"
+  confidence_threshold: 0.45
+  iou_threshold: 0.50
+  image_size: 640
+  device: "auto"
+  class_names:
+    - "echinus"
+    - "holothurian"
+    - "scallop"
+    - "starfish"
+    - "waterweeds"
+
+mission:
+  # 真实自主的两道授权门。离线识别/回放不受它们影响。
+  allow_autonomous_mission: false
+  allow_open_loop_horizontal_motion: false
+
+  detection_confirmation_frames: 5
+  alignment_confirmation_frames: 3
+  target_lost_timeout_s: 0.8
+  horizontal_tolerance: 0.08
+  vertical_tolerance: 0.10
+  yaw_gain: 0.5
+  vertical_gain: 0.5
+  maximum_yaw_command: 0.10
+  maximum_vertical_command: 0.10
+
+  descent_gain: 0.5
+  descent_max_command: 0.05
+  descent_settle_s: 1.0
+  descent_timeout_s: 45.0
+
+  scan_angle_deg: 360.0
+  scan_direction: "right"
+  scan_yaw_command: 0.05
+  scan_tolerance_deg: 3.0
+  scan_timeout_s: 120.0
+  maximum_yaw_step_deg: 45.0
+  yaw_progress_timeout_s: 5.0
+  maximum_search_cycles: 3
+
+  approach_alignment_multiplier: 1.5
+  approach_timeout_s: 30.0
+  maximum_grasp_area_ratio: 0.80
+
+  reacquire_grace_s: 0.5
+  reacquire_first_turn_deg: 60.0
+  reacquire_second_turn_deg: 120.0
+  reacquire_yaw_command: 0.05
+  reacquire_timeout_s: 90.0
+
+  gripper_hold_s: 1.5
+  gripper_command_timeout_s: 3.0
+
+  ascent_gain: 0.5
+  ascent_max_command: 0.05
+  ascent_tolerance_m: 0.05
+  ascent_settle_s: 1.0
+  ascent_timeout_s: 60.0
+
+  # 30 分钟赛程前留 60 s 主动回收；硬超时则中止并急停。
+  soft_mission_deadline_s: 1680.0
+  hard_mission_timeout_s: 1740.0
+  # 实艇完全浸没后的最小深度起点；0.30m 仍须用实物外形和深度零点确认。
+  minimum_start_depth_m: 0.30
+  maximum_operation_depth_m: 20.0
+  maximum_heartbeat_age_s: 1.5
+  maximum_message_age_s: 0.8
+  maximum_perception_age_s: 0.75
+  maximum_control_status_age_s: 0.75
+  allowed_flight_modes:
+    - "ALT_HOLD"
+
+  maximum_tracking_jump_ratio: 0.25
+  minimum_tracking_iou: 0.05

@@ -1,0 +1,7 @@
+# 仅包含 ROS 2 apt 仓库之外的 Python 依赖。
+# YOLO26 权重记录的训练版本为 Ultralytics 8.4.117，因此部署端固定同版。
+ultralytics==8.4.117
+pymavlink>=2.4.41,<3
+PyYAML>=6,<7
+pytest>=8,<9
+colcon-common-extensions>=0.3,<1

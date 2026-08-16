@@ -1,0 +1,17 @@
+# 权重包含水草，但水草不是抓取对象。默认只抓取规则中明确属于海产品的类别。
+# 海星是否作为活体海产品计分，请在赛前裁判会上确认后再按需加入。
+graspable_labels:
+  - "echinus"
+  - "holothurian"
+  - "scallop"
+  - "starfish"
+
+display_names:
+  echinus: "海胆"
+  holothurian: "海参"
+  scallop: "扇贝"
+  starfish: "海星"
+  waterweeds: "水草（不抓取）"
+
+unsupported_scoring_targets:
+  - "abalone"

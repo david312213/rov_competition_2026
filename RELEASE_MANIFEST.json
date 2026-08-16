@@ -1,0 +1,385 @@
+{
+  "release": "rov_competition_2026_precompetition_rc1",
+  "version": "0.2.0rc1",
+  "archive_top_level": "rov_competition_2026/",
+  "generated_at_utc": "2026-08-15T20:00:39.525801+00:00",
+  "source_candidate_directory": "rov_competition_2026_precompetition_rc1",
+  "safety_defaults": {
+    "live_actuation": false,
+    "ros_arming": false,
+    "gripper_actuation": false,
+    "autonomous_mission": false,
+    "open_loop_horizontal_motion": false,
+    "image_control_signs": null
+  },
+  "validation": {
+    "pure_python_pytest": "86 passed",
+    "python_compile": "passed",
+    "shell_syntax": "passed",
+    "package_xml_syntax": "passed",
+    "ros2_humble_colcon": "not run on macOS build host; run scripts/verify_ros2_humble.sh on Ubuntu 22.04 + ROS 2 Humble before real-vehicle use"
+  },
+  "limitations": [
+    "No DVL/underwater position source: 0.40 m forward travel is time-estimated.",
+    "Gripper service acceptance is not physical grasp feedback.",
+    "Offline replay is marked SIMULATION and is not real-vehicle evidence."
+  ],
+  "files": [
+    {
+      "path": ".gitignore",
+      "size_bytes": 187,
+      "sha256": "6786db9057dcdbabe1e10a8b0b713b3fcdf4614ae0742c190bbf068451601ebd"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 7367,
+      "sha256": "32b40f169b4cf961b727622c2dc487e5f7b48b07645fdb7db4d3041f4aee0a4d"
+    },
+    {
+      "path": "VERSION",
+      "size_bytes": 9,
+      "sha256": "db2a84ac4863727e53f9302da8e43ee1581216501b00f89bf2a43235c02f7b66"
+    },
+    {
+      "path": "config/.gitkeep",
+      "size_bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/01_自主状态机.md",
+      "size_bytes": 5410,
+      "sha256": "5f613a7252a83dcaf1f5aeb79ebcf4ba42679cfbc504530a724435925d68ef39"
+    },
+    {
+      "path": "docs/02_参数标定.md",
+      "size_bytes": 4348,
+      "sha256": "8dc78154e58f6e04efcf6ffa40670c6719ae38053450f66646bd35b335142e49"
+    },
+    {
+      "path": "docs/03_实机测试.md",
+      "size_bytes": 6628,
+      "sha256": "cc893820082981e86715589cc5197cd095faf42d059a9333de40c206b37fabce"
+    },
+    {
+      "path": "docs/04_版本替换.md",
+      "size_bytes": 3189,
+      "sha256": "c86f85abdcd5042c629d071f27a430a3a52e73bf2b284d1e11fe7479bebc8adc"
+    },
+    {
+      "path": "docs/05_ROS接口.md",
+      "size_bytes": 3092,
+      "sha256": "6eee0d5d5a506b54f0b8e2325e0ec834cf69e5e7b92bfa500c23aa44b2a63f29"
+    },
+    {
+      "path": "pytest.ini",
+      "size_bytes": 52,
+      "sha256": "4551307f5b1a58adb7ec215d513089ba670b1737b81ada5a5863afe796d67343"
+    },
+    {
+      "path": "requirements.txt",
+      "size_bytes": 249,
+      "sha256": "019129ece508ad929c01b56156d2ea0c073acafeb5a673818a92e63c94736911"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/config/autonomy.yaml",
+      "size_bytes": 3558,
+      "sha256": "a2f42e4446f476941d123ecaf38f6e938e10930238ff1b90268cc98e93049596"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/config/grasp_targets.yaml",
+      "size_bytes": 469,
+      "sha256": "59f892e53e1545bda5f9aac15f3e1dcd24695e23b666d8fb3ccc63b4cc9c5914"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/config/robot.example.yaml",
+      "size_bytes": 2591,
+      "sha256": "dd4ea238dd3ad3ca2aa5adf53a40deb30848d19633b90af946ff96d37bed779f"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/launch/competition.launch.py",
+      "size_bytes": 3586,
+      "sha256": "3e15f20b1ae88f1e6e6acd7723dcab531ab36090ba801b5bad615340fea2bf1a"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/launch/telemetry.launch.py",
+      "size_bytes": 1668,
+      "sha256": "74e6df6845aad30409fa484b0d712f49dad8ad5bb5a54bacab01c43c59ed0c25"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/models/seafood_yolo26x.pt",
+      "size_bytes": 118325029,
+      "sha256": "300eb3d98ae586c1c5b26b87b3a1baf6450bf6ef367acad4fc5129622ce20a23"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/package.xml",
+      "size_bytes": 778,
+      "sha256": "1757583222bdfa8ea653e1b2a8500b98760f6a466e632d42f240550c3ccdb6ed"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/resource/rov_competition",
+      "size_bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/__init__.py",
+      "size_bytes": 325,
+      "sha256": "91b4df46177067300b9e0aa68eb2a57bff38e4ab9cbd8f9434ca46413b89dca3"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/annotated_video.py",
+      "size_bytes": 3819,
+      "sha256": "e608826931dcc599f9930895e0db81fb3983dbe37efcf92e697a6e3e6744cff6"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/axis_test.py",
+      "size_bytes": 5281,
+      "sha256": "4b33962efa919ae9dff6a1c539d655a382c0499ca46e9392a533d3e03571ee80"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/commissioning.py",
+      "size_bytes": 5972,
+      "sha256": "1ac046effb5999f293cdd7c78bbf51fab39abf375797f90ff95eb55b01f28500"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/commissioning_runtime.py",
+      "size_bytes": 5737,
+      "sha256": "4e8276f2af2ef67171e0269fad48314318f150902cc880ee67d7744fb92e905e"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/config.py",
+      "size_bytes": 37383,
+      "sha256": "1d12397eac0db7e049df4beea1a87e44f19ebbb04c666479d2b31b75611d5a2a"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/control_safety.py",
+      "size_bytes": 1469,
+      "sha256": "6eac1829ba751fcdcdf557bd1fb16320e5e530f770517a8c50a3e9e377a02e66"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/detector.py",
+      "size_bytes": 9929,
+      "sha256": "9e7dcecfdace3deb8de1f71b1dc3a108b4cc53c93dc00922c301d591b6b25e53"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/domain.py",
+      "size_bytes": 7359,
+      "sha256": "61eee33aa22a8d271bc215fcdfb5941eff1208d1ddfe895b5af151f4fe98e809"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/mission.py",
+      "size_bytes": 45657,
+      "sha256": "147c764dc53650f80374e41fe186f9e5812c5c7f71af2234889cf7061dacc7da"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/motion_test.py",
+      "size_bytes": 6564,
+      "sha256": "3718f2a9ae5e142c3d17828b261a3423e0fec3f07255bf18d4115311169929f7"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/preflight.py",
+      "size_bytes": 15269,
+      "sha256": "91139488fd34b0dc4eae782eca9866e42caec401013a81cc7bdbef2550e4e4b7"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/preflight_cli.py",
+      "size_bytes": 1929,
+      "sha256": "41bffa5da796ac289bbf76b660763d2ae6e5fbca4ae2d5ca028f97bb15ebee2a"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/replay.py",
+      "size_bytes": 7814,
+      "sha256": "0ceda83454a4895c74a0218b392119393d20b0369f8b8ba658169f8fdfafc7ec"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/ros_nodes/__init__.py",
+      "size_bytes": 32,
+      "sha256": "941070e2b760cd5f96e4b2d9aa867cdb78b8a31208fd33534d69a7e163dbf143"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/ros_nodes/autonomy_node.py",
+      "size_bytes": 30047,
+      "sha256": "1e5133517c1244f348505914c71fbafc744b31ef70693ffa47c86bcd9cb92dc5"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/ros_nodes/telemetry_view_node.py",
+      "size_bytes": 3813,
+      "sha256": "99b494159a10647cbf53d6d1bda78568a9c0db37cfd42ec984853e2aea4f9f8e"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/ros_nodes/vehicle_gateway_node.py",
+      "size_bytes": 31890,
+      "sha256": "30a8bcac75b9b115cf7ebe59aeafa39f9e2ccd5bf1fdef9c3aabdedf8838ec6d"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/safety.py",
+      "size_bytes": 5018,
+      "sha256": "e33d4137f7cd5c57acadc8e09c8841d479ef877fef7a80dc2838386a07de6060"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/stream_bridge.py",
+      "size_bytes": 6718,
+      "sha256": "bc81d80ccbf4c7a67a070338677d935393f655ae23c88bbafd39a4eb40bd52f3"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/targets.py",
+      "size_bytes": 1492,
+      "sha256": "9a1946410b29f7195d1dbe96a1d0612ae71b9b33812844d7fb9c8de79b757209"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/turn_test.py",
+      "size_bytes": 5241,
+      "sha256": "dfda9698f62f455b3091c6478592858b15ef1cf2d7caf730fec3d6c3933f272c"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/vehicle.py",
+      "size_bytes": 33244,
+      "sha256": "c12f62f1bcd4af5d3d60f24bd011a366786bbd63bfeb6d14b3bb004531bdb7f3"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/rov_competition/video.py",
+      "size_bytes": 2485,
+      "sha256": "730062616d5b7cdb8205d6da70c26b70875d5dbfc26bcfc8b698f20e68a19761"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/setup.cfg",
+      "size_bytes": 100,
+      "sha256": "f99b0050154a125c9bee66848e3f17e2b7fd2233b8147cf723e737a7e8be79eb"
+    },
+    {
+      "path": "ros2_ws/src/rov_competition/setup.py",
+      "size_bytes": 1517,
+      "sha256": "2a3865eadeb5ba75896e850b52edc733992edc85d6733382c411171558498360"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/CMakeLists.txt",
+      "size_bytes": 554,
+      "sha256": "5ca3e18e233ad300f34d525071041a738cc3c24006564d33b6f85e859b5fc403"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/msg/ControlStatus.msg",
+      "size_bytes": 446,
+      "sha256": "2b76c1b7e36427e62e35909a1d887099975764c1bade23ea7f6bddb38acac4c8"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/msg/MissionStatus.msg",
+      "size_bytes": 583,
+      "sha256": "7bfa3ecab6f2a1827295bbb0c2588c64594a1e7e48a0d3f156be44820893a20e"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/msg/NormalizedMotionCommand.msg",
+      "size_bytes": 268,
+      "sha256": "85c9a7178b5ecbbd297b57f9616a38e5e6d6df9160bf0f9f38689e443d8e3b87"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/msg/RobotTelemetry.msg",
+      "size_bytes": 557,
+      "sha256": "9c104fb1bbe5fa3198504c7fc12dcc395f271a2ae574db9c6c6b9e07cf1f4da3"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/msg/TargetDetection.msg",
+      "size_bytes": 148,
+      "sha256": "98f28587aa51b33e731dfafea6e5f66078ac943ba5953fec02bb9a6812eaab3b"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/msg/TargetDetectionArray.msg",
+      "size_bytes": 225,
+      "sha256": "85d55ea89efe14d3ae33c32323ba9fa29c3841f7d577b93085b01fe14280045d"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/package.xml",
+      "size_bytes": 620,
+      "sha256": "584e873fb4912c214f71de505e16f0bdbe8644f310db6bc697a63aab7794e3fe"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/srv/SetArmed.srv",
+      "size_bytes": 208,
+      "sha256": "7dc92028303014967fee5ad4bdd4d7c4bc2d0488b589c891505a251c3ef18151"
+    },
+    {
+      "path": "ros2_ws/src/rov_interfaces/srv/SetGripper.srv",
+      "size_bytes": 295,
+      "sha256": "ec757ffc1486b00fc803afa187085f89e6909be3904c916a7b0f75dd84a5eae9"
+    },
+    {
+      "path": "scripts/build_release.py",
+      "size_bytes": 5754,
+      "sha256": "9e60777cb303ab647f6c226b374a8cc48c36a8c08032e55556cf5da7e98452ee"
+    },
+    {
+      "path": "scripts/install_ubuntu_22_04.sh",
+      "size_bytes": 2726,
+      "sha256": "b4df980bc66a750ac57f5a461582775ac3c318d4673170c004de912d17499d5f"
+    },
+    {
+      "path": "scripts/run_tests.sh",
+      "size_bytes": 409,
+      "sha256": "405ebb81ebc1c0aaca4f6e29ef54fa0b19e4ac91c205e1db5987f1b34824d59c"
+    },
+    {
+      "path": "scripts/verify_ros2_humble.sh",
+      "size_bytes": 1572,
+      "sha256": "9af7ca6a40fa48ba0964775f427504f6a940b33db6a7d198fb49242c81a8151c"
+    },
+    {
+      "path": "tests/conftest.py",
+      "size_bytes": 287,
+      "sha256": "9197c193b983152517328e82c4324729b0c2dac0c93ff8727e6ea8fe64255ee7"
+    },
+    {
+      "path": "tests/fixtures/legacy_six_thruster_params.log",
+      "size_bytes": 1456,
+      "sha256": "be175d303c888beb70a1eaaa49af54a533c1d092d7a57bec9d6453fc36c0e8aa"
+    },
+    {
+      "path": "tests/test_annotated_video.py",
+      "size_bytes": 841,
+      "sha256": "077e371002b382f18781f9f525e7673baf139717d113f22efe1a8f6c1b7b10f6"
+    },
+    {
+      "path": "tests/test_commissioning.py",
+      "size_bytes": 3472,
+      "sha256": "096511c322876bcc61c5fb555175fc027c2ea11a85dd4460d8fb9be284e7107d"
+    },
+    {
+      "path": "tests/test_config.py",
+      "size_bytes": 6219,
+      "sha256": "8354e079d64ad640e44de8025dc0e23688a43f36904a21d15fd4807e7e634eb6"
+    },
+    {
+      "path": "tests/test_control_safety.py",
+      "size_bytes": 1155,
+      "sha256": "58f14972368f55f7b871526e178c6a2934917382f02ec83a634aa30ce1e802e7"
+    },
+    {
+      "path": "tests/test_mission.py",
+      "size_bytes": 14678,
+      "sha256": "162cc532a9e0b55395e830e203782ea54aeea36a5ac5913422ec45c9ceb3a0ef"
+    },
+    {
+      "path": "tests/test_preflight.py",
+      "size_bytes": 4622,
+      "sha256": "3b897d8317819daedb8415693828f7a81ca06fe69ef9d64d2da811da88924b16"
+    },
+    {
+      "path": "tests/test_safety.py",
+      "size_bytes": 5483,
+      "sha256": "f5bedc05e87d5a62120a958f26124e653174120e29159d58314171d4893626b9"
+    },
+    {
+      "path": "tests/test_stream_bridge.py",
+      "size_bytes": 1818,
+      "sha256": "d65fff53b2ee44067d6b18700c7f870e94fb61c61d7e417938e198c5b725f1ac"
+    },
+    {
+      "path": "tests/test_telemetry_freshness.py",
+      "size_bytes": 431,
+      "sha256": "0b2e4ff3ede96a8b55449f132c0b15b28e74f836be76c0810c97a58277dc55c0"
+    },
+    {
+      "path": "tests/test_vehicle.py",
+      "size_bytes": 15035,
+      "sha256": "6845f539ebca39f2e8004e16c47283ca44e3449b539a686252a5361dc887bb5b"
+    }
+  ],
+  "manifest_note": "RELEASE_MANIFEST.json is omitted from its own recursive file hash list."
+}

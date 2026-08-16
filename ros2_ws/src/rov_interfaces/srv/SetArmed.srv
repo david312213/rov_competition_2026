@@ -1,0 +1,8 @@
+# arm=true 时 confirmation 必须严格等于 "ARM ROV"。
+# arm=false 不需要确认词，并且永远不会使用强制解锁/上锁参数。
+
+bool arm
+string confirmation
+---
+bool success
+string message

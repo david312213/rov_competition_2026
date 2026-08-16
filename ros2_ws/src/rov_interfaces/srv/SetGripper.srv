@@ -1,0 +1,11 @@
+# 机械爪命令必须包含新鲜时间戳、唯一控制来源和明确动作。
+# success=true 只代表网关接受并发送了命令，不代表传感器确认已抓牢。
+
+uint8 OPEN=1
+uint8 CLOSE=2
+builtin_interfaces/Time stamp
+string source
+uint8 action
+---
+bool success
+string message

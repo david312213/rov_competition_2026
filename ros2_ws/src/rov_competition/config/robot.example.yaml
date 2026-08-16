@@ -1,0 +1,74 @@
+# 八推进器 ROV 硬件“示例”配置
+#
+# 这是故意不能驱动实艇的模板。复制成 config/robot.yaml 后，先运行只读预检，
+# 再根据 QGroundControl、实物接线和水中方向测试填写。不得把旧六推参数直接照搬。
+
+mavlink:
+  # QGC 通常使用 14550；ROS 应使用 MAVLink Router 分配的另一个双向端点。
+  connection_uri: "udpin:0.0.0.0:14551"
+  heartbeat_timeout_s: 10.0
+  heartbeat_stale_timeout_s: 1.5
+  telemetry_stale_timeout_s: 1.0
+  preflight_timeout_s: 20.0
+  baud: 115200
+  # 旧飞控记录中的 GCS system id 是 255。若实艇参数不同，以只读预检为准。
+  source_system: 255
+  # MAV_COMP_ID_ONBOARD_COMPUTER。该值只标识本进程，不是飞控的 component id。
+  source_component: 191
+
+control:
+  # 默认使用归一化 MANUAL_CONTROL；rc_override 只用于确认过的旧固件兼容场景。
+  protocol: "manual_control"
+  # commissioning 只允许单轴/转向测试；autonomy 只允许自主节点。
+  # 网关启动后不允许在两种来源之间切换。
+  profile: "commissioning"
+  allowed_flight_modes: ["MANUAL"]
+
+  # 必须对照实物与 ArduSub 机架图填写 2 或 3。null 会阻止任何真实执行。
+  expected_frame_config: null
+  expected_motor_count: 8
+
+  # 第一次固定架点动只使用 0.05；确认方向后最大也先保持 0.10。
+  command_limit: 0.10
+  maximum_command_age_s: 0.25
+  slew_rate_per_s: 0.5
+  command_timeout_s: 0.5
+
+  # 方向只能根据艇体坐标系逐轴实测。这里的 +1 不是已经标定的结论。
+  directions:
+    forward: 1
+    lateral: 1
+    vertical: 1
+    yaw: 1
+
+rc_override:
+  # 仅供显式选择 protocol: rc_override 时使用。MIN/TRIM/MAX 会从飞控
+  # 只读参数报告获取，不在这里猜。1100/1500/1900 只是旧艇历史线索。
+  # 下列通道也来自旧六推代码，不是八推进器输出口编号。
+  channels:
+    forward: 5
+    lateral: 6
+    vertical: 3
+    yaw: 4
+
+safety:
+  # 配置、launch 和运行时服务三道门默认全部关闭。
+  allow_live_actuation: false
+  allow_ros_arming: false
+  allow_gripper_actuation: false
+  maximum_pilot_input_timeout_s: 3.0
+  expected_gcs_failsafe_action: 2
+  arm_ack_timeout_s: 3.0
+
+gripper:
+  # 绝对 SERVO 输出号；旧代码的“4 + 8”没有足够实机证据，因此默认不授权。
+  output_channel: 12
+  open_pwm: 1650
+  close_pwm: 1900
+
+depth:
+  # 旧代码把 AHRS2.altitude 取负作为深度。必须用实测水深确认消息、字段和单位。
+  message: "AHRS2"
+  field: "altitude"
+  multiplier: -1.0
+  offset_m: 0.0
