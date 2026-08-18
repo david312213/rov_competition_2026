@@ -56,7 +56,13 @@ def generate_launch_description() -> LaunchDescription:
                         "robot_config": LaunchConfiguration("robot_config"),
                         "autonomy_config": LaunchConfiguration("autonomy_config"),
                         "targets_config": LaunchConfiguration("targets_config"),
-                        "video_source": LaunchConfiguration("video_source"),
+                        # 数字形式的视频源（例如 UDP 端口 "5702" 或摄像头
+                        # 编号 "0"）也必须保留为字符串。若不显式指定类型，
+                        # launch_ros 会把纯数字文本自动解析成整数，而自主节点
+                        # 为了统一处理摄像头、文件和网络地址，声明的是字符串参数。
+                        "video_source": ParameterValue(
+                            LaunchConfiguration("video_source"), value_type=str
+                        ),
                         "gstreamer": ParameterValue(
                             LaunchConfiguration("gstreamer"), value_type=bool
                         ),
