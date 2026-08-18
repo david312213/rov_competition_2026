@@ -6,7 +6,6 @@
   <maintainer email="team@example.invalid">ROV Team</maintainer>
   <license>Proprietary</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>rclpy</exec_depend>
