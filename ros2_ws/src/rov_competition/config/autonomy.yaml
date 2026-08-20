@@ -1,4 +1,4 @@
-# ROV 自主抓取候选版 0.2.0rc1
+# ROV 自主抓取候选版 0.2.0rc2
 #
 # 现场人员优先只调 field_tuning。这些初值是“待水池标定的起点”，
 # 不是实艇已验证结论。标定完成前，真实自主启动会明确拒绝。
@@ -49,7 +49,8 @@ detector:
   confidence_threshold: 0.45
   iou_threshold: 0.50
   image_size: 640
-  device: "auto"
+  # 固定使用第一张 NVIDIA 显卡，避免环境串包后静默退回 CPU。
+  device: "0"
   class_names:
     - "echinus"
     - "holothurian"

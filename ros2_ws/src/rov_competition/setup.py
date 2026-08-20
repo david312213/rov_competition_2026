@@ -8,7 +8,7 @@ PACKAGE_NAME = "rov_competition"
 
 setup(
     name=PACKAGE_NAME,
-    version="0.2.0rc1",
+    version="0.2.0rc2",
     packages=find_packages(),
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{PACKAGE_NAME}"]),

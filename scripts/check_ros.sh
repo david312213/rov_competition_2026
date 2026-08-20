@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 验证的必须是本工程 .venv + 系统 ROS，不是 ~/.local 里的旧包。
+export PYTHONNOUSERSITE=1
+
 # 只做构建、接口生成和纯软件测试，不连接 MAVLink，不发送实机命令。
 if [[ ! -r /opt/ros/humble/setup.bash ]]; then
   echo "未找到 ROS 2 Humble: /opt/ros/humble/setup.bash" >&2
@@ -13,7 +16,7 @@ PYTHON_BIN="${PROJECT_DIR}/.venv/bin/python"
 COLCON_BIN="${PROJECT_DIR}/.venv/bin/colcon"
 
 if [[ ! -x "${PYTHON_BIN}" || ! -x "${COLCON_BIN}" ]]; then
-  echo "请先运行 ./scripts/install_ubuntu_22_04.sh" >&2
+  echo "请先运行 ./scripts/install.sh" >&2
   exit 1
 fi
 
@@ -22,9 +25,7 @@ source /opt/ros/humble/setup.bash
 set -u
 
 cd "${PROJECT_DIR}"
-"${PYTHON_BIN}" -m pytest -q
-find ros2_ws/src/rov_competition -name '*.py' -print0 \
-  | xargs -0 "${PYTHON_BIN}" -m py_compile
+bash "${PROJECT_DIR}/scripts/check.sh"
 
 cd "${PROJECT_DIR}/ros2_ws"
 "${COLCON_BIN}" build --symlink-install
@@ -41,7 +42,7 @@ ros2 interface show rov_interfaces/srv/SetGripper >/dev/null
 ros2 interface show rov_interfaces/msg/NormalizedMotionCommand >/dev/null
 
 EXECUTABLES="$(ros2 pkg executables rov_competition)"
-for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_turn_test rov_replay; do
+for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_turn_test rov_replay rov_stream_bridge; do
   if ! grep -q " ${REQUIRED}$" <<<"${EXECUTABLES}"; then
     echo "缺少 ROS 命令入口: ${REQUIRED}" >&2
     exit 1

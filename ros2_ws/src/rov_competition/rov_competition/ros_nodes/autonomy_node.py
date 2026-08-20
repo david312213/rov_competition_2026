@@ -48,7 +48,13 @@ from rov_competition.safety import (
     autonomy_safety_error,
 )
 from rov_competition.targets import load_target_config
-from rov_competition.video import OpenCvVideoSource, VideoSourceError, build_udp_mpegts_url
+from rov_competition.video import (
+    GStreamerVideoSource,
+    OpenCvVideoSource,
+    VideoSourceError,
+    build_udp_mpegts_url,
+    build_udp_rtp_h264_gstreamer_pipeline,
+)
 
 
 @dataclass(frozen=True)
@@ -79,11 +85,11 @@ class AutonomyNode(Node):
         super().__init__("rov_autonomy")
         self.declare_parameter("robot_config", "config/robot.example.yaml")
         self.declare_parameter("autonomy_config", "config/autonomy.yaml")
-        self.declare_parameter("targets_config", "config/grasp_targets.yaml")
+        self.declare_parameter("targets_config", "config/targets.yaml")
         self.declare_parameter("video_source", "0")
         self.declare_parameter("gstreamer", False)
         self.declare_parameter("udp_mpegts", False)
-        self.declare_parameter("display_window", True)
+        self.declare_parameter("display_window", False)
         self.declare_parameter("annotated_rtp_host", "")
         self.declare_parameter("annotated_rtp_port", 0)
         self.declare_parameter("command_source", "autonomy")
@@ -97,6 +103,11 @@ class AutonomyNode(Node):
         self._display_window = self._boolean_parameter("display_window")
         if use_gstreamer and use_udp_mpegts:
             raise ValueError("gstreamer 和 udp_mpegts 不能同时启用")
+        if self._display_window:
+            raise ValueError(
+                "display_window 必须保持 false；请订阅 "
+                "/rov/annotated_image/compressed 查看带框画面"
+            )
 
         self._robot_config = load_robot_config(robot_path)
         self._config = load_autonomy_config(autonomy_path)
@@ -129,10 +140,17 @@ class AutonomyNode(Node):
             self._mission = AutonomousGraspMission(
                 self._config.mission, self._target_config.graspable_labels
             )
-            self._video = OpenCvVideoSource(
-                _source_value(video_source, udp_mpegts=use_udp_mpegts),
-                gstreamer=use_gstreamer,
-            )
+            if use_gstreamer:
+                pipeline = (
+                    build_udp_rtp_h264_gstreamer_pipeline(int(video_source))
+                    if video_source.isdecimal()
+                    else video_source
+                )
+                self._video = GStreamerVideoSource(pipeline)
+            else:
+                self._video = OpenCvVideoSource(
+                    _source_value(video_source, udp_mpegts=use_udp_mpegts)
+                )
             self._video.open()
         except Exception:
             if self._annotated_writer is not None:

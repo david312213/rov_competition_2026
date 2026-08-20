@@ -6,14 +6,13 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 ARCHIVE_ROOT = "rov_competition_2026"
-RELEASE_BASENAME = "rov_competition_2026_precompetition_rc1"
+RELEASE_BASENAME = "rov_competition_2026_precompetition_rc2"
 MANIFEST_NAME = "RELEASE_MANIFEST.json"
 EXCLUDED_DIRECTORY_NAMES = {
     ".git",
@@ -55,7 +54,9 @@ def release_files(project: Path) -> list[Path]:
     return sorted(files, key=lambda item: item.relative_to(project).as_posix())
 
 
-def build_manifest(project: Path, files: list[Path]) -> dict:
+def build_manifest(
+    project: Path, files: list[Path], *, pytest_summary: str
+) -> dict:
     """构建不包含自身哈希的发布清单。"""
 
     version = (project / "VERSION").read_text(encoding="utf-8").strip()
@@ -74,12 +75,12 @@ def build_manifest(project: Path, files: list[Path]) -> dict:
             "image_control_signs": None,
         },
         "validation": {
-            "pure_python_pytest": "86 passed",
+            "pure_python_pytest": pytest_summary,
             "python_compile": "passed",
             "shell_syntax": "passed",
             "package_xml_syntax": "passed",
             "ros2_humble_colcon": (
-                "not run on macOS build host; run scripts/verify_ros2_humble.sh "
+                "not run on macOS build host; run scripts/check_ros.sh "
                 "on Ubuntu 22.04 + ROS 2 Humble before real-vehicle use"
             ),
         },
@@ -102,14 +103,17 @@ def build_manifest(project: Path, files: list[Path]) -> dict:
     }
 
 
-def write_release(project: Path, output_dir: Path) -> tuple[Path, Path, Path]:
+def write_release(
+    project: Path,
+    output_dir: Path,
+    *,
+    pytest_summary: str = "not recorded by packaging command",
+) -> tuple[Path, Path, Path]:
     """原子性地生成 ZIP，并返回 ZIP、哈希文件和外部清单路径。"""
 
     files = release_files(project)
-    manifest = build_manifest(project, files)
-    manifest_path = project / MANIFEST_NAME
+    manifest = build_manifest(project, files, pytest_summary=pytest_summary)
     manifest_text = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
-    manifest_path.write_text(manifest_text, encoding="utf-8")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     archive_path = output_dir / f"{RELEASE_BASENAME}.zip"
@@ -131,9 +135,14 @@ def write_release(project: Path, output_dir: Path) -> tuple[Path, Path, Path]:
             directory = zipfile.ZipInfo(f"{ARCHIVE_ROOT}/")
             directory.external_attr = 0o40755 << 16
             archive.writestr(directory, b"")
-            for path in [*files, manifest_path]:
+            for path in files:
                 relative = path.relative_to(project).as_posix()
                 archive.write(path, arcname=f"{ARCHIVE_ROOT}/{relative}")
+            # 清单只写入发布包和 output/，不在项目根目录留下生成文件。
+            archive.writestr(
+                f"{ARCHIVE_ROOT}/{MANIFEST_NAME}",
+                manifest_text.encode("utf-8"),
+            )
         temporary_path.replace(archive_path)
         archive_path.chmod(0o644)
     finally:
@@ -142,7 +151,7 @@ def write_release(project: Path, output_dir: Path) -> tuple[Path, Path, Path]:
 
     archive_hash = sha256_file(archive_path)
     hash_path.write_text(f"{archive_hash}  {archive_path.name}\n", encoding="utf-8")
-    shutil.copyfile(manifest_path, external_manifest)
+    external_manifest.write_text(manifest_text, encoding="utf-8")
     return archive_path, hash_path, external_manifest
 
 
@@ -156,8 +165,17 @@ def main() -> int:
         type=Path,
         default=project.parent / "output" / "releases",
     )
+    parser.add_argument(
+        "--pytest-summary",
+        default="not recorded by packaging command",
+        help="只记录已经实际运行完的 pytest 结果",
+    )
     args = parser.parse_args()
-    archive, checksum, manifest = write_release(project, args.output_dir.resolve())
+    archive, checksum, manifest = write_release(
+        project,
+        args.output_dir.resolve(),
+        pytest_summary=args.pytest_summary,
+    )
     print(archive)
     print(checksum)
     print(manifest)

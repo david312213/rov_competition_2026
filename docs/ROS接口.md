@@ -26,6 +26,15 @@
 
 `/rov/autonomy/start` 和 `/rov/autonomy/abort` 暂时保留为旧命令兼容别名。
 
+带框图像通过独立 ROS 话题查看：
+
+```bash
+ros2 run rqt_image_view rqt_image_view
+```
+
+在界面中选择 `/rov/annotated_image/compressed`。不得在自主节点中启用
+`display_window=true`；OpenCV HighGUI 会阻塞 ROS 多线程回调和节点退出。
+
 ## 3. 来源互斥
 
 - `control.profile: commissioning` 时，网关只接受来源 `commissioning`；用于 `rov_axis_test`、`rov_turn_test` 和兼容 `rov_motion_test`。
@@ -40,8 +49,12 @@
 ros2 topic echo /rov/control/status
 ros2 topic echo /rov/telemetry
 ros2 topic echo /rov/mission/status
+ros2 topic hz /rov/detections
 ros2 topic hz /rov/control/command
 ros2 topic hz /rov/annotated_image/compressed
 ```
+
+`/rov/detections` 应接近相机实际帧率。`/rov/mission/status` 用于确认任务是否
+真的处于活动状态、当前目标和深度是否有效；话题存在本身不等于自主运动已启动。
 
 保存 rosbag、网关/自主终端完整日志、QGC 参数备份和同步录像。单独一行“节点启动成功”不能证明控制、状态机或安全条件正确。

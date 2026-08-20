@@ -10,6 +10,7 @@ ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
 output/
+/RELEASE_MANIFEST.json
 
 # 每台实艇独有的配置与现场备份，不得提交到公共历史
 config/robot.yaml

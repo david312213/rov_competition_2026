@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>rov_interfaces</name>
-  <version>0.2.0</version>
+  <version>0.2.1</version>
   <description>2026 ROV 作业赛道控制、遥测与检测接口。</description>
   <maintainer email="team@example.invalid">ROV Team</maintainer>
   <license>Proprietary</license>

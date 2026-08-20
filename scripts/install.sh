@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 不允许 ~/.local/lib/python* 里的旧 Torch/OpenCV 污染工程环境。
+# 团队已经实际遇到过“激活 .venv 却加载用户级 CPU Torch”。
+export PYTHONNOUSERSITE=1
+
 # 仅支持 Ubuntu 22.04 + ROS 2 Humble。脚本不会配置飞控通道，也不会开启推进器。
 if [[ ! -r /etc/os-release ]]; then
   echo "无法读取 /etc/os-release；请在 Ubuntu 22.04 上运行。" >&2
@@ -28,6 +32,9 @@ sudo apt install -y \
   python3-rosdep \
   python3-venv \
   python3-opencv \
+  python3-gi \
+  gir1.2-gstreamer-1.0 \
+  gir1.2-gst-plugins-base-1.0 \
   ffmpeg \
   gstreamer1.0-tools \
   gstreamer1.0-libav \

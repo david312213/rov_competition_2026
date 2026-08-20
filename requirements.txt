@@ -4,7 +4,7 @@ ultralytics==8.4.117
 pymavlink>=2.4.41,<3
 PyYAML>=6,<7
 pytest>=8,<9
-# install_ubuntu_22_04.sh 会在虚拟环境中生成独立 colcon 入口。
+# install.sh 会在虚拟环境中生成独立 colcon 入口。
 # colcon-core 的运行元数据要求这两个 pytest 插件，显式声明可避免
 # --system-site-packages 环境中出现“pip check 缺失”。
 pytest-repeat>=0.9,<1

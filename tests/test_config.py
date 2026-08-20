@@ -46,6 +46,7 @@ def test_autonomy_model_path_and_hash_are_stable() -> None:
     assert config.detector.expected_sha256 == (
         "300eb3d98ae586c1c5b26b87b3a1baf6450bf6ef367acad4fc5129622ce20a23"
     )
+    assert config.detector.device == "0"
     assert config.mission.descent_delta_m == pytest.approx(0.30)
     assert config.mission.advance_target_distance_m == pytest.approx(0.40)
     assert config.mission.advance_duration_s == pytest.approx(4.0 / 3.0)

@@ -1,7 +1,7 @@
 """启动真实遥测和自主感知；默认禁止任何真实执行。"""
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -18,7 +18,8 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("video_source", default_value="0"),
             DeclareLaunchArgument("gstreamer", default_value="false"),
             DeclareLaunchArgument("udp_mpegts", default_value="false"),
-            DeclareLaunchArgument("display_window", default_value="true"),
+            # 带框画面通过 ROS 压缩图像话题查看，避免 HighGUI 阻塞节点退出。
+            DeclareLaunchArgument("display_window", default_value="false"),
             DeclareLaunchArgument("annotated_rtp_host", default_value=""),
             DeclareLaunchArgument("annotated_rtp_port", default_value="0"),
             DeclareLaunchArgument("enable_actuation", default_value="false"),
@@ -26,6 +27,8 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "preflight_output_dir", default_value="output/preflight"
             ),
+            # 子节点启动 Python 时忽略 ~/.local，防止 CPU Torch 覆盖 .venv CUDA 版。
+            SetEnvironmentVariable("PYTHONNOUSERSITE", "1"),
             Node(
                 package="rov_competition",
                 executable="rov_vehicle",
