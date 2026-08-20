@@ -6,6 +6,7 @@ from rov_competition.video import (
     VideoSourceError,
     build_udp_mpegts_url,
     build_udp_rtp_h264_gstreamer_pipeline,
+    should_retry_live_video_interruption,
 )
 
 
@@ -16,7 +17,7 @@ def test_rtp_pipeline_has_fixed_jitter_and_complete_frame_single_slot() -> None:
     assert "udpsrc port=5702" in pipeline
     assert "application/x-rtp" in pipeline
     assert "payload=96" in pipeline
-    assert "rtpjitterbuffer latency=20" in pipeline
+    assert "rtpjitterbuffer latency=50" in pipeline
     assert "drop-on-latency=true" in pipeline
     assert "rtph264depay" in pipeline
     assert "mpegts" not in pipeline
@@ -59,3 +60,26 @@ def test_old_mpegts_url_remains_available_for_compatibility() -> None:
     url = build_udp_mpegts_url(5702)
     assert url.startswith("udp://127.0.0.1:5702?")
     assert "overrun_nonfatal=1" in url
+
+
+@pytest.mark.parametrize(
+    ("live_stream", "mission_active", "expected"),
+    [
+        (True, False, True),
+        (True, True, False),
+        (False, False, False),
+        (False, True, False),
+    ],
+)
+def test_only_inactive_live_video_may_retry(
+    live_stream: bool, mission_active: bool, expected: bool
+) -> None:
+    """只读 RTP 测试可恢复，活动任务和录像结束必须保持安全失败。"""
+
+    assert (
+        should_retry_live_video_interruption(
+            live_stream=live_stream,
+            mission_active=mission_active,
+        )
+        is expected
+    )

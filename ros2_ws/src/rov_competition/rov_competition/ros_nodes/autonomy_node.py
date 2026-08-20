@@ -54,6 +54,7 @@ from rov_competition.video import (
     VideoSourceError,
     build_udp_mpegts_url,
     build_udp_rtp_h264_gstreamer_pipeline,
+    should_retry_live_video_interruption,
 )
 
 
@@ -175,6 +176,9 @@ class AutonomyNode(Node):
         self._active = False
         self._failed = False
         self._destroying = False
+        self._live_video_source = use_gstreamer
+        self._video_recovery_pending = False
+        self._last_video_warning_monotonic = 0.0
         self._terminal_action_started = False
         self._frame_id = 0
         self._perception: PerceptionSnapshot | None = None
@@ -492,10 +496,17 @@ class AutonomyNode(Node):
     def _process_frame(self) -> None:
         """感知循环：读图、YOLO 推理、更新快照并发布带框画面。"""
 
-        ok, frame = self._video.read()
-        if not ok:
-            self._fail_safe("相机断流或录像结束")
+        try:
+            ok, frame = self._video.read()
+        except VideoSourceError as exc:
+            self._handle_video_interruption(str(exc))
             return
+        if not ok:
+            self._handle_video_interruption("相机断流或录像结束")
+            return
+        if self._video_recovery_pending:
+            self._video_recovery_pending = False
+            self.get_logger().info("YOLO 视频已经自动恢复")
         try:
             detections = self._detector.detect(frame)
         except DetectorError as exc:
@@ -537,6 +548,37 @@ class AutonomyNode(Node):
         self._publish_image(annotated)
         self._display_image(annotated)
         self._publish_annotated_rtp(annotated)
+
+    def _handle_video_interruption(self, reason: str) -> None:
+        """只读测试自动重连直播；真实任务仍按原安全策略立即中止。"""
+
+        with self._state_lock:
+            mission_active = self._active
+        if not should_retry_live_video_interruption(
+            live_stream=self._live_video_source,
+            mission_active=mission_active,
+        ):
+            self._fail_safe(reason)
+            return
+
+        now = time.monotonic()
+        should_log = (
+            not self._video_recovery_pending
+            or now - self._last_video_warning_monotonic >= 10.0
+        )
+        self._video_recovery_pending = True
+        if should_log:
+            self._last_video_warning_monotonic = now
+            self.get_logger().warning(
+                f"{reason}；自主任务未启动，正在重建 YOLO 解码管线，QGC 不受影响"
+            )
+
+        try:
+            self._video.release()
+            self._video.open()
+        except VideoSourceError as exc:
+            if should_log:
+                self.get_logger().warning(f"YOLO 视频重连尚未成功: {exc}")
 
     def _publish_decision(
         self,

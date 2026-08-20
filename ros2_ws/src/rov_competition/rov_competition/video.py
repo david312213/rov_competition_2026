@@ -35,7 +35,7 @@ def build_udp_rtp_h264_gstreamer_pipeline(
 ) -> str:
     """创建比赛默认的 RTP/H.264 单槽位解码管线。
 
-    20 ms 抖动缓冲只负责少量网络乱序。泄漏队列位于 ``h264parse``
+    50 ms 抖动缓冲负责少量网络乱序和水密缆上的短时突发。泄漏队列位于 ``h264parse``
     之后，此处一个缓冲区已经是一张完整 H.264 access unit；因此慢一帧时
     丢弃的是完整旧帧，不会从一张图像中间随意丢 RTP 包而主动制造花屏。
     ``appsink`` 也只保留一帧，YOLO 每次读取当前可用的新画面。
@@ -49,7 +49,7 @@ def build_udp_rtp_h264_gstreamer_pipeline(
             f"udpsrc port={port} buffer-size=262144",
             "caps=application/x-rtp,media=video,encoding-name=H264,"
             f"payload={payload_type},clock-rate=90000",
-            "! rtpjitterbuffer latency=20 drop-on-latency=true do-lost=true",
+            "! rtpjitterbuffer latency=50 drop-on-latency=true do-lost=true",
             "! rtph264depay",
             "! h264parse",
             "! video/x-h264,stream-format=byte-stream,alignment=au",
@@ -62,6 +62,19 @@ def build_udp_rtp_h264_gstreamer_pipeline(
             "drop=true max-buffers=1 sync=false",
         ]
     )
+
+
+def should_retry_live_video_interruption(
+    *, live_stream: bool, mission_active: bool
+) -> bool:
+    """判断视频中断后能否只重连解码器而不进入永久故障。
+
+    只读视频测试没有运动风险，因此 RTP 直播短时断帧时应自动重建本地
+    解码管线。自主任务一旦开始，或者输入是已经结束的录像文件，就不能
+    假装画面仍然有效，必须交给上层执行安全中止。
+    """
+
+    return live_stream and not mission_active
 
 
 class OpenCvVideoSource:
