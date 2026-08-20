@@ -49,4 +49,10 @@ for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_turn_test rov_replay 
   fi
 done
 
+VIDEO_LAUNCH="$(ros2 pkg prefix --share rov_competition)/launch/video_test.launch.py"
+if [[ ! -r "${VIDEO_LAUNCH}" ]]; then
+  echo "缺少一键视频 launch 文件: ${VIDEO_LAUNCH}" >&2
+  exit 1
+fi
+
 echo "ROS 2 Humble 构建、测试、接口和命令入口检查全部通过。"

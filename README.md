@@ -111,6 +111,20 @@ ros2 run rov_competition rov_replay \
 
 `rov_replay` 不连 MAVLink，画面会标记 `SIMULATION`，不能作为实艇验收证据。
 
+## 一键查看 QGC 和 YOLO
+
+安装和编译完成后，视频测试不再需要手动开三四个终端：
+
+```bash
+cd /home/persica/rov_competition_2026/rov_competition_2026
+./scripts/start_video_test.sh
+```
+
+它会启动 `5600 → 5701(QGC) + 5702(YOLO)` 分流、YOLO，并尝试打开
+QGC 和带框查看器。这个入口故意不启动飞控网关，因此不会解锁或驱动
+机器人。按 `Ctrl+C` 即可一起停止视频分流和 YOLO。首次 QGC 设置和排错
+方法见 [实机操作](docs/实机操作.md) 第 7 节。
+
 ## 实艇必须逐级验收
 
 1. QGC 连接 ArduSub，保存完整参数备份。
