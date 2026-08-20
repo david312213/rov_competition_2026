@@ -1,4 +1,4 @@
-"""把一份艇载 RTP/H.264 原始数据包复制给 QGC 和 YOLO。"""
+"""把一份艇载 RTP/H.264 原始数据包复制给多个本机使用者。"""
 
 from __future__ import annotations
 
@@ -91,10 +91,12 @@ def build_pipeline_arguments(
     inference_port: int | None,
     rtmp_url: str | None,
     display: bool = True,
+    record_host: str | None = None,
+    record_port: int | None = None,
 ) -> list[str]:
     """创建不经过 shell 解释的 GStreamer 参数列表。
 
-    QGC 与 AI 共用一个 ``multiudpsink``。进入该分支前没有解包、解析、
+    QGC、AI 和可选录像器共用一个 ``multiudpsink``。进入该分支前没有解包、解析、
     重封装或编码操作，所以两端收到的是 5600 上原始 RTP 包的本机副本。
     只有可选的本机显示和 RTMP 分支会另外解码或封装，它们不改变分流包。
     """
@@ -110,14 +112,26 @@ def build_pipeline_arguments(
     inference_endpoint = _validate_endpoint(
         "AI", inference_host, inference_port, source_port=source_port
     )
-    if qgc_endpoint is not None and inference_endpoint is not None:
-        qgc_key = (_canonical_host(qgc_endpoint[0]), qgc_endpoint[1])
-        inference_key = (
-            _canonical_host(inference_endpoint[0]),
-            inference_endpoint[1],
-        )
-        if qgc_key == inference_key:
-            raise StreamConfigurationError("QGC 与 AI 不能使用同一个目标主机和端口")
+    record_endpoint = _validate_endpoint(
+        "录像器", record_host, record_port, source_port=source_port
+    )
+
+    named_endpoints = (
+        ("QGC", qgc_endpoint),
+        ("AI", inference_endpoint),
+        ("录像器", record_endpoint),
+    )
+    used: dict[tuple[str, int], str] = {}
+    for label, endpoint in named_endpoints:
+        if endpoint is None:
+            continue
+        key = (_canonical_host(endpoint[0]), endpoint[1])
+        previous = used.get(key)
+        if previous is not None:
+            raise StreamConfigurationError(
+                f"{previous} 与 {label} 不能使用同一个目标主机和端口"
+            )
+        used[key] = label
 
     if rtmp_url:
         parsed = urlparse(rtmp_url)
@@ -126,11 +140,13 @@ def build_pipeline_arguments(
 
     endpoints = [
         endpoint
-        for endpoint in (qgc_endpoint, inference_endpoint)
+        for endpoint in (qgc_endpoint, inference_endpoint, record_endpoint)
         if endpoint is not None
     ]
     if not endpoints and not display and not rtmp_url:
-        raise StreamConfigurationError("至少启用 QGC、AI、显示或 RTMP 中的一路输出")
+        raise StreamConfigurationError(
+            "至少启用 QGC、AI、录像器、显示或 RTMP 中的一路输出"
+        )
 
     arguments = [
         "gst-launch-1.0",
@@ -219,6 +235,8 @@ def main() -> None:
     parser.add_argument("--inference-host", default="127.0.0.1")
     parser.add_argument("--inference-port", type=_port, default=5702)
     parser.add_argument("--no-inference", action="store_true", help="禁用 AI 转发分支")
+    parser.add_argument("--record-host", help="可选原始 RTP 录像器主机")
+    parser.add_argument("--record-port", type=_port, help="可选原始 RTP 录像器端口")
     parser.add_argument("--rtmp", help="可选 RTMP/RTMPS 推流地址")
     parser.add_argument(
         "--no-display",
@@ -235,6 +253,8 @@ def main() -> None:
         qgc_port=None if args.no_qgc else args.qgc_port,
         inference_host=None if args.no_inference else args.inference_host,
         inference_port=None if args.no_inference else args.inference_port,
+        record_host=args.record_host,
+        record_port=args.record_port,
         rtmp_url=args.rtmp,
         display=not args.no_display,
     )

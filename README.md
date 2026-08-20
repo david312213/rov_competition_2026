@@ -14,6 +14,9 @@
 |---|---|
 | 第一次安装或更新 | [安装与更新](docs/安装与更新.md) |
 | 连实艇、点动、标定 | [实机操作](docs/实机操作.md) |
+| 用手柄驾驶并录像 | [手柄采集 README](docs/手柄采集README.md) |
+| 用键盘驾驶并录像 | [键盘采集 README](docs/键盘采集README.md) |
+| 把录像导出成全部或均匀取样图片 | [抽帧工具 README](docs/抽帧工具README.md) |
 | 理解自主流程 | [自主任务](docs/自主任务.md) |
 | 查 ROS 话题和服务 | [ROS 接口](docs/ROS接口.md) |
 | 设置 QGC 与 YOLO 视频分流 | [实机操作](docs/实机操作.md) 第 7 节 |
@@ -62,7 +65,7 @@ rov_competition_2026/
 仅支持 Ubuntu 22.04 + ROS 2 Humble：
 
 ```bash
-cd /home/persica/rov_competition_2026/rov_competition_2026
+cd /home/persica/rov_competition_2026
 chmod +x scripts/*.sh
 ./scripts/install.sh
 ```
@@ -70,7 +73,7 @@ chmod +x scripts/*.sh
 每个新终端先加载环境：
 
 ```bash
-cd /home/persica/rov_competition_2026/rov_competition_2026
+cd /home/persica/rov_competition_2026
 source /opt/ros/humble/setup.bash
 source .venv/bin/activate
 source ros2_ws/install/setup.bash
@@ -116,7 +119,7 @@ ros2 run rov_competition rov_replay \
 安装和编译完成后，视频测试不再需要手动开三四个终端：
 
 ```bash
-cd /home/persica/rov_competition_2026/rov_competition_2026
+cd /home/persica/rov_competition_2026
 ./scripts/start_video_test.sh
 ```
 
@@ -124,6 +127,55 @@ cd /home/persica/rov_competition_2026/rov_competition_2026
 QGC 和带框查看器。这个入口故意不启动飞控网关，因此不会解锁或驱动
 机器人。按 `Ctrl+C` 即可一起停止视频分流和 YOLO。首次 QGC 设置和排错
 方法见 [实机操作](docs/实机操作.md) 第 7 节。
+
+## 一键键盘驾驶和数据集录像
+
+这个入口用于重拍训练数据，不加载 YOLO、不需要权重、不控制机械爪：
+
+```bash
+cd /home/persica/rov_competition_2026
+./scripts/start_dataset_collection.sh
+```
+
+首次会生成 `config/dataset.yaml`。当前场地水深至少 `1.50 m`，
+因此 `maximum_depth_m` 默认为 `1.40 m`，并允许相对启动深度继续
+下潜最多 `1.20 m`。
+更换场地时必须重新测量和填写。脚本编排 MAVProxy、飞控网关、
+`5600 → 5701(QGC) + 5702(原始 MKV 录像)` 和键盘窗口。
+它不会自动沉底；只有录像、ALT_HOLD、深度、预检和现场确认
+全部通过后才允许解锁。按键、深度保护、按 `0` 回收以及
+Esc/Ctrl+C 急停的详细说明见
+[键盘采集 README](docs/键盘采集README.md)。
+
+## 手柄驾驶时只录像
+
+如果已经用 QGC 和手柄控制 ROV，不需要 ROS 键盘控制，只运行：
+
+```bash
+cd /home/persica/rov_competition_2026
+./scripts/start_dataset_recording.sh
+```
+
+它会自动尝试打开 QGC，只进行
+`5600 → 5701(QGC) + 5702(MKV 录像)`，不启动
+MAVProxy、飞控网关、YOLO、机械爪或任何控制节点。开始后立即
+录像，回到终端按 Enter 或 `Ctrl+C` 完整封装 MKV。详见
+[手柄采集 README](docs/手柄采集README.md)。
+
+## 一键桌面抽帧
+
+录像完成后，不需要写 FFmpeg 命令。运行：
+
+```bash
+cd /home/persica/rov_competition_2026
+./scripts/start_frame_extractor.sh
+```
+
+把视频拖进窗口后，输出帧数填 `0` 可导出所有帧，也可填指定数量在整段
+视频中均匀取样。软件显示进度、预计容量和剩余时间，
+支持 JPG/PNG、选择输出磁盘、安全取消和一键打开结果目录。还可以运行
+一次 `./scripts/install_frame_extractor_shortcut.sh`，之后直接从 Ubuntu
+应用菜单打开。详见 [抽帧工具 README](docs/抽帧工具README.md)。
 
 ## 实艇必须逐级验收
 

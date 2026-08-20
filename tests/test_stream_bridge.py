@@ -39,6 +39,58 @@ def test_default_fanout_copies_one_rtp_stream_with_multiudpsink() -> None:
     assert "openh264enc" not in command
 
 
+def test_dataset_mode_copies_to_qgc_and_recorder_without_ai() -> None:
+    """数据集模式的 5702 是录像器，仍与 QGC 共享原始包分流。"""
+
+    command = build_pipeline_arguments(
+        source_port=5600,
+        payload_type=96,
+        qgc_host="127.0.0.1",
+        qgc_port=5701,
+        inference_host=None,
+        inference_port=None,
+        record_host="127.0.0.1",
+        record_port=5702,
+        rtmp_url=None,
+        display=False,
+    )
+    assert "clients=127.0.0.1:5701,127.0.0.1:5702" in command
+    assert "rtph264depay" not in command
+    assert "h264parse" not in command
+    assert "mpegtsmux" not in command
+
+
+def test_recorder_target_must_not_duplicate_qgc_or_source() -> None:
+    """录像分支不得重复 QGC 端口或回送到输入 5600。"""
+
+    with pytest.raises(StreamConfigurationError, match="同一个目标"):
+        build_pipeline_arguments(
+            source_port=5600,
+            payload_type=96,
+            qgc_host="localhost",
+            qgc_port=5701,
+            inference_host=None,
+            inference_port=None,
+            record_host="127.0.0.1",
+            record_port=5701,
+            rtmp_url=None,
+            display=False,
+        )
+    with pytest.raises(StreamConfigurationError, match="视频回环"):
+        build_pipeline_arguments(
+            source_port=5600,
+            payload_type=96,
+            qgc_host=None,
+            qgc_port=None,
+            inference_host=None,
+            inference_port=None,
+            record_host="127.0.0.1",
+            record_port=5600,
+            rtmp_url=None,
+            display=False,
+        )
+
+
 def test_pipeline_is_an_argument_list_not_shell_text() -> None:
     """RTMP 地址作为一个参数传递，特殊字符不由 shell 执行。"""
 

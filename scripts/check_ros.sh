@@ -42,12 +42,25 @@ ros2 interface show rov_interfaces/srv/SetGripper >/dev/null
 ros2 interface show rov_interfaces/msg/NormalizedMotionCommand >/dev/null
 
 EXECUTABLES="$(ros2 pkg executables rov_competition)"
-for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_turn_test rov_replay rov_stream_bridge; do
+for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_dataset_drive rov_dataset_record rov_frame_extractor rov_turn_test rov_replay rov_stream_bridge; do
   if ! grep -q " ${REQUIRED}$" <<<"${EXECUTABLES}"; then
     echo "缺少 ROS 命令入口: ${REQUIRED}" >&2
     exit 1
   fi
 done
+
+if [[ ! -x "${PROJECT_DIR}/scripts/start_dataset_collection.sh" ]]; then
+  echo "缺少一键数据集采集脚本" >&2
+  exit 1
+fi
+if [[ ! -x "${PROJECT_DIR}/scripts/start_dataset_recording.sh" ]]; then
+  echo "缺少手柄只录像脚本" >&2
+  exit 1
+fi
+if [[ ! -x "${PROJECT_DIR}/scripts/start_frame_extractor.sh" ]]; then
+  echo "缺少桌面抽帧启动脚本" >&2
+  exit 1
+fi
 
 VIDEO_LAUNCH="$(ros2 pkg prefix --share rov_competition)/launch/video_test.launch.py"
 if [[ ! -r "${VIDEO_LAUNCH}" ]]; then

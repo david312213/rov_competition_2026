@@ -31,6 +31,7 @@ sudo apt update
 sudo apt install -y \
   python3-rosdep \
   python3-venv \
+  python3-tk \
   python3-opencv \
   python3-gi \
   gir1.2-gstreamer-1.0 \

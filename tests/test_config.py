@@ -8,12 +8,25 @@ from rov_competition.config import (
     ControlProfile,
     ControlProtocol,
     load_autonomy_config,
+    load_dataset_config,
     load_robot_config,
 )
 
 PROJECT = Path(__file__).resolve().parents[1]
 PACKAGE = PROJECT / "ros2_ws" / "src" / "rov_competition"
 ROBOT_EXAMPLE = PACKAGE / "config" / "robot.example.yaml"
+DATASET_EXAMPLE = PACKAGE / "config" / "dataset.example.yaml"
+
+
+def test_dataset_template_uses_confirmed_pool_depth_with_relative_guard() -> None:
+    """至少 1.50 m 水深允许到 1.40 m，且保留相对下潜限制。"""
+
+    dataset = load_dataset_config(DATASET_EXAMPLE)
+    assert dataset.maximum_depth_m == pytest.approx(1.40)
+    assert dataset.maximum_descent_from_start_m == pytest.approx(1.20)
+    assert dataset.effective_depth_limit(0.20) == pytest.approx(1.40)
+    errors = dataset.readiness_errors(load_robot_config(ROBOT_EXAMPLE))
+    assert not any("maximum_depth_m" in error for error in errors)
 
 
 def test_example_robot_configuration_is_safe_and_explicit() -> None:

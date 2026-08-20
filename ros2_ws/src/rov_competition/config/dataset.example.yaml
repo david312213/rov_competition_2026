@@ -1,0 +1,39 @@
+# ROV 水池数据集采集配置
+#
+# 首次使用时，一键脚本会把本文件复制为 config/dataset.yaml。
+# 当前场地已确认至少有 1.50 m 水深；更换场地后必须重新测量。
+
+manual_control:
+  # W/A/S/D、1/2 和上下方向键的归一化运动指令。
+  initial_command: 0.05
+  minimum_command: 0.01
+  maximum_command: 0.10
+  command_step: 0.01
+  publish_rate_hz: 20.0
+
+depth_safety:
+  # 已知水池水深至少 1.50 m，当前允许 ROV 深度到 1.40 m。
+  # 这是“允许的最深深度”，不是必须下潜到的目标。
+  maximum_depth_m: 1.40
+
+  # 即使绝对深度填错，也不允许相对启动深度无限下潜。
+  maximum_descent_from_start_m: 1.20
+  limit_margin_m: 0.05
+
+  # 启动时必须已经完全浸没，且深度在指定时间内足够稳定。
+  minimum_start_depth_m: 0.10
+  start_depth_stable_s: 1.0
+  start_depth_max_variation_m: 0.05
+
+recovery:
+  # 按 0 后只会上升回启动深度，绝不会为了追深度而重新下潜。
+  gain: 0.50
+  maximum_command: 0.05
+  tolerance_m: 0.05
+  settle_s: 1.0
+  timeout_s: 60.0
+
+safety:
+  maximum_telemetry_age_s: 0.75
+  maximum_status_age_s: 0.75
+  allowed_flight_mode: "ALT_HOLD"

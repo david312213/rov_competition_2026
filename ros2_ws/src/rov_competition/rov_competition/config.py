@@ -244,6 +244,133 @@ class RobotConfig:
 
 
 @dataclass(frozen=True)
+class DatasetCollectionConfig:
+    """水池数据采集的键盘、深度与回收安全参数。
+
+    这些参数不包含电机通道或 PWM。键盘工具仍只发布四轴
+    归一化运动意图，八推进器混控由 ArduSub 完成。
+    """
+
+    initial_command: float
+    minimum_command: float
+    maximum_command: float
+    command_step: float
+    publish_rate_hz: float
+
+    maximum_depth_m: float | None
+    maximum_descent_from_start_m: float
+    depth_limit_margin_m: float
+    minimum_start_depth_m: float
+    start_depth_stable_s: float
+    start_depth_max_variation_m: float
+
+    recovery_gain: float
+    recovery_max_command: float
+    recovery_tolerance_m: float
+    recovery_settle_s: float
+    recovery_timeout_s: float
+
+    maximum_telemetry_age_s: float
+    maximum_status_age_s: float
+    allowed_flight_mode: str
+
+    def __post_init__(self) -> None:
+        """在连接实艇前拒绝不合法或会绕过限幅的参数。"""
+
+        commands = (
+            self.minimum_command,
+            self.initial_command,
+            self.maximum_command,
+        )
+        if any(not math.isfinite(value) or not 0.0 < value <= 1.0 for value in commands):
+            raise ConfigurationError("键盘指令幅值必须在 (0, 1] 内")
+        if not self.minimum_command <= self.initial_command <= self.maximum_command:
+            raise ConfigurationError(
+                "键盘初始指令必须位于最小与最大指令之间"
+            )
+        if not math.isfinite(self.command_step) or self.command_step <= 0.0:
+            raise ConfigurationError("键盘指令调节步长必须大于 0")
+        if not 5.0 <= self.publish_rate_hz <= 50.0:
+            raise ConfigurationError("键盘控制发布频率必须在 5..50 Hz")
+
+        if self.maximum_depth_m is not None:
+            if not math.isfinite(self.maximum_depth_m) or self.maximum_depth_m <= 0.0:
+                raise ConfigurationError("maximum_depth_m 必须大于 0 或保持 null")
+        if (
+            not math.isfinite(self.maximum_descent_from_start_m)
+            or self.maximum_descent_from_start_m <= 0.0
+        ):
+            raise ConfigurationError("maximum_descent_from_start_m 必须大于 0")
+        if (
+            not math.isfinite(self.depth_limit_margin_m)
+            or not 0.0 <= self.depth_limit_margin_m
+            < self.maximum_descent_from_start_m
+        ):
+            raise ConfigurationError("深度保护余量必须在 [0, 相对下潜上限) 内")
+        if not math.isfinite(self.minimum_start_depth_m) or self.minimum_start_depth_m < 0.0:
+            raise ConfigurationError("最小启动深度不能为负数")
+        if (
+            self.maximum_depth_m is not None
+            and self.maximum_depth_m <= self.minimum_start_depth_m
+        ):
+            raise ConfigurationError("绝对最大深度必须大于最小启动深度")
+        if self.start_depth_stable_s <= 0.0 or self.start_depth_max_variation_m <= 0.0:
+            raise ConfigurationError("启动深度稳定时间和波动上限必须大于 0")
+
+        recovery_values = (
+            self.recovery_gain,
+            self.recovery_max_command,
+            self.recovery_tolerance_m,
+            self.recovery_settle_s,
+            self.recovery_timeout_s,
+            self.maximum_telemetry_age_s,
+            self.maximum_status_age_s,
+        )
+        if any(not math.isfinite(value) or value <= 0.0 for value in recovery_values):
+            raise ConfigurationError("回收控制和数据新鲜度参数必须大于 0")
+        if self.recovery_max_command > self.maximum_command:
+            raise ConfigurationError("回收上升指令不能超过键盘最大指令")
+        if self.allowed_flight_mode != "ALT_HOLD":
+            raise ConfigurationError("数据采集工具只允许 ALT_HOLD 模式")
+
+    def effective_depth_limit(self, start_depth_m: float) -> float:
+        """返回绝对上限与相对上限中更浅的一个。"""
+
+        if self.maximum_depth_m is None:
+            raise ConfigurationError(
+                "depth_safety.maximum_depth_m 仍为 null，禁止实艇解锁"
+            )
+        if not math.isfinite(start_depth_m):
+            raise ConfigurationError("启动深度必须是有限数")
+        return min(
+            self.maximum_depth_m,
+            start_depth_m + self.maximum_descent_from_start_m,
+        )
+
+    def readiness_errors(self, robot: RobotConfig) -> tuple[str, ...]:
+        """列出一键采集禁止解锁的全部配置原因。"""
+
+        errors: list[str] = []
+        if self.maximum_depth_m is None:
+            errors.append("depth_safety.maximum_depth_m 尚未填写")
+        if robot.control_profile != ControlProfile.COMMISSIONING:
+            errors.append("robot.yaml 的 control.profile 必须是 commissioning")
+        if self.allowed_flight_mode not in robot.allowed_flight_modes:
+            errors.append("robot.yaml 的 allowed_flight_modes 必须包含 ALT_HOLD")
+        if not robot.allow_live_actuation:
+            errors.append("robot.yaml 尚未允许真实输出")
+        if not robot.allow_ros_arming:
+            errors.append("robot.yaml 尚未允许 ROS 解锁")
+        if robot.allow_gripper_actuation:
+            errors.append("数据采集时必须关闭机械爪权限")
+        if self.maximum_command > robot.command_limit:
+            errors.append(
+                "dataset 最大指令超过 robot.yaml 的 control.command_limit"
+            )
+        return tuple(errors)
+
+
+@dataclass(frozen=True)
 class DetectorConfig:
     """YOLO 推理参数。"""
 
@@ -486,6 +613,84 @@ def load_robot_config(path: str | Path) -> RobotConfig:
         )
     except KeyError as exc:
         raise ConfigurationError(f"机器人配置缺少字段: {exc.args[0]}") from exc
+
+
+def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
+    """读取键盘遥控和原始视频采集参数，不连接实艇。"""
+
+    data = _read_yaml(path)
+    manual = _mapping(data.get("manual_control", {}), "manual_control")
+    depth = _mapping(data.get("depth_safety", {}), "depth_safety")
+    recovery = _mapping(data.get("recovery", {}), "recovery")
+    safety = _mapping(data.get("safety", {}), "safety")
+
+    maximum_depth_value = depth.get("maximum_depth_m")
+    maximum_depth = (
+        None
+        if maximum_depth_value is None
+        else _finite(maximum_depth_value, "depth_safety.maximum_depth_m")
+    )
+    return DatasetCollectionConfig(
+        initial_command=_finite(
+            manual.get("initial_command", 0.05), "manual_control.initial_command"
+        ),
+        minimum_command=_finite(
+            manual.get("minimum_command", 0.01), "manual_control.minimum_command"
+        ),
+        maximum_command=_finite(
+            manual.get("maximum_command", 0.10), "manual_control.maximum_command"
+        ),
+        command_step=_finite(
+            manual.get("command_step", 0.01), "manual_control.command_step"
+        ),
+        publish_rate_hz=_finite(
+            manual.get("publish_rate_hz", 20.0), "manual_control.publish_rate_hz"
+        ),
+        maximum_depth_m=maximum_depth,
+        maximum_descent_from_start_m=_finite(
+            depth.get("maximum_descent_from_start_m", 0.50),
+            "depth_safety.maximum_descent_from_start_m",
+        ),
+        depth_limit_margin_m=_finite(
+            depth.get("limit_margin_m", 0.05), "depth_safety.limit_margin_m"
+        ),
+        minimum_start_depth_m=_finite(
+            depth.get("minimum_start_depth_m", 0.10),
+            "depth_safety.minimum_start_depth_m",
+        ),
+        start_depth_stable_s=_finite(
+            depth.get("start_depth_stable_s", 1.0),
+            "depth_safety.start_depth_stable_s",
+        ),
+        start_depth_max_variation_m=_finite(
+            depth.get("start_depth_max_variation_m", 0.05),
+            "depth_safety.start_depth_max_variation_m",
+        ),
+        recovery_gain=_finite(recovery.get("gain", 0.5), "recovery.gain"),
+        recovery_max_command=_finite(
+            recovery.get("maximum_command", 0.05), "recovery.maximum_command"
+        ),
+        recovery_tolerance_m=_finite(
+            recovery.get("tolerance_m", 0.05), "recovery.tolerance_m"
+        ),
+        recovery_settle_s=_finite(
+            recovery.get("settle_s", 1.0), "recovery.settle_s"
+        ),
+        recovery_timeout_s=_finite(
+            recovery.get("timeout_s", 60.0), "recovery.timeout_s"
+        ),
+        maximum_telemetry_age_s=_finite(
+            safety.get("maximum_telemetry_age_s", 0.75),
+            "safety.maximum_telemetry_age_s",
+        ),
+        maximum_status_age_s=_finite(
+            safety.get("maximum_status_age_s", 0.75),
+            "safety.maximum_status_age_s",
+        ),
+        allowed_flight_mode=str(
+            safety.get("allowed_flight_mode", "ALT_HOLD")
+        ).strip().upper(),
+    )
 
 
 def _unit_interval(value: Any, name: str, *, include_zero: bool = False) -> float:
