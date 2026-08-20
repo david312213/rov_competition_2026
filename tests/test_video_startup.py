@@ -6,13 +6,15 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[1]
 LAUNCH = PROJECT / "ros2_ws/src/rov_competition/launch/video_test.launch.py"
 SCRIPT = PROJECT / "scripts/start_video_test.sh"
+REQUIREMENTS = PROJECT / "requirements.txt"
 
 
 def test_video_launch_contains_only_stream_and_perception_nodes() -> None:
     """测试 launch 可以分流和识别，但不得启动飞控网关。"""
 
     source = LAUNCH.read_text(encoding="utf-8")
-    assert 'executable="rov_stream_bridge"' in source
+    assert "ExecuteProcess(" in source
+    assert '"rov_stream_bridge"' in source
     assert 'executable="rov_autonomy"' in source
     assert "rov_vehicle" not in source
     assert "set_armed" not in source
@@ -35,3 +37,11 @@ def test_one_click_script_uses_fixed_separate_video_ports() -> None:
     assert "enable_actuation:=true" not in source
     assert "enable_ros_arming:=true" not in source
     assert "rov_vehicle_gateway" in source
+
+
+def test_visual_dependencies_keep_the_ubuntu_22_04_numpy_abi() -> None:
+    """部署依赖必须阻止 NumPy 2 与旧 ABI OpenCV 混装。"""
+
+    source = REQUIREMENTS.read_text(encoding="utf-8")
+    assert "numpy==1.26.4" in source
+    assert "opencv-python==4.11.0.86" in source

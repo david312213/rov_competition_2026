@@ -1,4 +1,9 @@
 # 仅包含 ROS 2 apt 仓库之外的 Python 依赖。
+# OpenCV 4.12 开始在 Python 3.10 上要求 NumPy 2，但 Ubuntu 22.04/ROS Humble
+# 中仍有按 NumPy 1.x ABI 编译的视觉模块。固定这一对已验证版本，避免
+# “_ARRAY_API not found” 和进程崩溃。
+numpy==1.26.4
+opencv-python==4.11.0.86
 # YOLO26 权重记录的训练版本为 Ultralytics 8.4.117，因此部署端固定同版。
 ultralytics==8.4.117
 pymavlink>=2.4.41,<3

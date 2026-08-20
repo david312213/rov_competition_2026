@@ -32,7 +32,8 @@
 ros2 run rqt_image_view rqt_image_view
 ```
 
-在界面中选择 `/rov/annotated_image/compressed`。不得在自主节点中启用
+在界面中选择基础话题 `/rov/annotated_image`，传输方式选择
+`compressed`；不得直接订阅带 `/compressed` 后缀的传输子话题。不得在自主节点中启用
 `display_window=true`；OpenCV HighGUI 会阻塞 ROS 多线程回调和节点退出。
 
 ## 3. 来源互斥

@@ -75,6 +75,27 @@ set -u
 export PYTHONNOUSERSITE=1
 cd "${PROJECT_DIR}"
 
+# 在启动多个进程前先做快速 ABI/GPU 检查，避免启动后才喷出一长串
+# ``_ARRAY_API not found`` 或静默退回 CPU 的报错。
+if ! python - <<'PY'
+import cv2
+import numpy
+import torch
+
+if int(numpy.__version__.split(".", 1)[0]) >= 2:
+    raise RuntimeError(f"本工程要求 NumPy 1.x，当前为 {numpy.__version__}")
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA 不可用；禁止用 CPU 模式开始现场视频测试")
+
+print(f"视觉环境正常：NumPy {numpy.__version__}, OpenCV {cv2.__version__}")
+print(f"GPU：{torch.cuda.get_device_name(0)}")
+PY
+then
+  echo "视觉环境不兼容，请先执行：" >&2
+  echo 'python -m pip install --upgrade --force-reinstall "numpy==1.26.4" "opencv-python==4.11.0.86"' >&2
+  exit 1
+fi
+
 port_owner() {
   local port="$1"
   ss -H -lunp 2>/dev/null | grep -E ":${port}([[:space:]]|$)" || true
@@ -155,7 +176,8 @@ LAUNCH_PID=$!
 sleep 2
 if ! kill -0 "${LAUNCH_PID}" 2>/dev/null; then
   echo "ROS 视频启动失败，请查看上方完整报错。" >&2
-  wait "${LAUNCH_PID}"
+  wait "${LAUNCH_PID}" 2>/dev/null || true
+  exit 1
 fi
 
 if "${START_QGC}"; then
@@ -187,7 +209,7 @@ if "${START_VIEWER}"; then
       exec ros2 run rqt_image_view rqt_image_view
     ) &
     VIEWER_PID=$!
-    echo "带框查看器将在几秒后打开；请选择 /rov/annotated_image/compressed。"
+    echo "带框查看器将在几秒后打开；请选择 /rov/annotated_image，传输方式选 compressed。"
   else
     echo "未安装 rqt_image_view；仍可用 ros2 topic hz 检查识别帧率。"
   fi
