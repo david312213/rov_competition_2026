@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 import traceback
@@ -32,12 +33,10 @@ from .config import (
 from .dataset_control import (
     DatasetRuntimeSnapshot,
     DatasetControlError,
-    DepthSafetyController,
     KeyCommandState,
     RecoveryController,
     active_safety_error,
     prearm_safety_error,
-    stable_start_depth,
 )
 from .dataset_recording import (
     DatasetRecordingError,
@@ -204,8 +203,6 @@ def _runtime_snapshot(node: DatasetDriveNode) -> DatasetRuntimeSnapshot:
         status_age_s=now - node.status_received_at,
         heartbeat_valid=bool(telemetry.valid_heartbeat),
         attitude_valid=bool(telemetry.valid_attitude),
-        depth_valid=bool(telemetry.valid_depth),
-        depth_m=float(telemetry.depth_m),
         telemetry_mode=str(telemetry.flight_mode),
         status_mode=str(status.flight_mode),
         preflight_passed=bool(status.preflight_passed),
@@ -244,21 +241,14 @@ def _active_error(
     return active_safety_error(_runtime_snapshot(node), config, source=SOURCE)
 
 
-def _collect_start_depth(
-    node: DatasetDriveNode, config: DatasetCollectionConfig
-) -> float:
-    """记录启动深度，用于相对上限和按 0 回收。"""
+def _current_depth(node: DatasetDriveNode) -> float | None:
+    """返回仅供显示/回收使用的当前深度，不作为驾驶门控。"""
 
-    samples: list[float] = []
-    deadline = time.monotonic() + config.start_depth_stable_s
-    while rclpy.ok() and time.monotonic() < deadline:
-        node.spin(0.05)
-        error = _prearm_error(node, config, require_disarmed=True)
-        if error is not None:
-            raise DatasetDriveError(error)
-        assert node.telemetry is not None
-        samples.append(float(node.telemetry.depth_m))
-    return stable_start_depth(samples, config)
+    telemetry = node.telemetry
+    if telemetry is None or not telemetry.valid_depth:
+        return None
+    depth_m = float(telemetry.depth_m)
+    return depth_m if math.isfinite(depth_m) else None
 
 
 def _publish_neutral_once(node: DatasetDriveNode) -> None:
@@ -321,21 +311,21 @@ def _draw_window(
     font: object,
     *,
     key_state: KeyCommandState,
-    depth_m: float,
-    depth_limit_m: float,
+    depth_m: float | None,
     yaw_deg: float,
     message: str,
 ) -> None:
     """绘制简单高对比控制面板；不显示相机画面。"""
 
     screen.fill((17, 24, 39))
+    depth_text = "n/a" if depth_m is None else f"{depth_m:.2f} m"
     lines = [
         "ROV DATASET DRIVE - HOLD KEY TO MOVE",
         "W/S forward/back | A/D left/right | 1/2 turn",
         "UP/DOWN ascend/descend | +/- power | SPACE neutral",
         "0 finalize + recover | ESC/close emergency stop",
         f"power={key_state.strength:.2f}  held={'+'.join(sorted(key_state.held_keys)) or 'none'}",
-        f"depth={depth_m:.2f} m  limit={depth_limit_m:.2f} m  yaw={yaw_deg:.1f} deg",
+        f"depth={depth_text} (display only)  yaw={yaw_deg:.1f} deg",
         message[:95],
     ]
     for index, line in enumerate(lines):
@@ -418,12 +408,10 @@ def _run_keyboard_loop(
     config: DatasetCollectionConfig,
     recorder: RtpMkvRecorder,
     logger: DatasetSessionLogger,
-    start_depth_m: float,
 ) -> tuple[str, str]:
     """运行按住才动的事件循环，返回退出类型和说明。"""
 
     key_state = KeyCommandState(config)
-    depth_guard = DepthSafetyController(config, start_depth_m)
     screen = pygame.display.set_mode((860, 320))
     pygame.display.set_caption("ROV Dataset Drive")
     font = pygame.font.Font(None, 28)
@@ -511,29 +499,21 @@ def _run_keyboard_loop(
         if error is not None:
             raise DatasetDriveError(error)
         if not recorder.is_stream_fresh(maximum_idle_s=3.0):
-            # 只有录像失效时会走正常回收路径；上层再次
-            # 检查遥测，不会在飞控数据失效时盲目上升。
+            # 录像失效时先回中；上层只在深度可用时执行回收。
             return "recording_fault", "原始视频录像停止增长"
 
         assert node.telemetry is not None
         now = time.monotonic()
         requested = key_state.motion()
-        guarded = depth_guard.apply(
-            requested,
-            depth_valid=bool(node.telemetry.valid_depth),
-            depth_m=float(node.telemetry.depth_m),
-        )
-        if guarded.message:
-            message = guarded.message
         if now >= next_publish:
-            node.publish(guarded.motion)
+            node.publish(requested)
             _log_sample(
                 logger,
                 node,
                 key_state,
-                guarded.motion,
+                requested,
                 event="command",
-                message=guarded.message,
+                message=message,
             )
             next_publish = now + period_s
 
@@ -542,8 +522,7 @@ def _run_keyboard_loop(
             screen,
             font,
             key_state=key_state,
-            depth_m=float(node.telemetry.depth_m),
-            depth_limit_m=depth_guard.depth_limit_m,
+            depth_m=_current_depth(node),
             yaw_deg=float(node.telemetry.yaw_deg),
             message=message,
         )
@@ -551,7 +530,7 @@ def _run_keyboard_loop(
     raise DatasetDriveError("ROS 上下文已关闭")
 
 
-def _interactive_confirmation(start_depth_m: float, depth_limit_m: float) -> None:
+def _interactive_confirmation() -> None:
     """在解锁前要求操作员亲自确认现场条件。"""
 
     if not sys.stdin.isatty():
@@ -560,7 +539,7 @@ def _interactive_confirmation(start_depth_m: float, depth_limit_m: float) -> Non
     print("  1. ROV 已完全浸没，推进器危险区无人。")
     print("  2. 飞控已由操作员切到 ALT_HOLD。")
     print("  3. QGC 画面和手动上锁功能可用，安全员可断电。")
-    print(f"  4. 启动深度 {start_depth_m:.2f} m，本次上限 {depth_limit_m:.2f} m。")
+    print("  4. 键盘工具不设置软件深度上限，操作员负责观察水池和缆线。")
     typed = input(f"\n若全部满足，完整输入 {DATASET_CONFIRMATION!r}: ").strip()
     if typed != DATASET_CONFIRMATION:
         raise DatasetDriveError("确认词不匹配，未开启控制")
@@ -587,8 +566,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.execute:
         print("配置预览通过；未初始化 ROS、未启动录像、不会解锁。")
         print(
-            f"指令 {config.initial_command:.2f}，最大 {config.maximum_command:.2f}，"
-            f"相对下潜不超过 {config.maximum_descent_from_start_m:.2f} m。"
+            f"指令 {config.initial_command:.2f}，最大 {config.maximum_command:.2f}；"
+            "键盘采集不设置软件深度上限。"
         )
         return 0
     if not args.session_dir:
@@ -608,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
     pygame_started = False
     control_opened = False
     normal_completed = False
+    recovery_completed = False
     outcome = "failed_before_arm"
     detail = "启动未完成"
     video_path: Path | None = None
@@ -640,20 +620,15 @@ def main(argv: list[str] | None = None) -> int:
         probe.fill((25, 25, 25))
         pygame.display.flip()
 
-        start_depth_m = _collect_start_depth(node, config)
-        depth_limit_m = config.effective_depth_limit(start_depth_m)
-        if depth_limit_m - start_depth_m <= config.depth_limit_margin_m:
-            raise DatasetDriveError(
-                "启动深度与实际上限之间没有足够的深度保护余量"
-            )
-        logger.set_depths(start_depth_m, depth_limit_m)
+        start_depth_m = _current_depth(node)
+        logger.set_start_depth(start_depth_m)
 
         recorder.start()
         recorder.wait_until_receiving(
             timeout_s=8.0,
             pump=lambda: node.spin(0.0),
         )
-        _interactive_confirmation(start_depth_m, depth_limit_m)
+        _interactive_confirmation()
 
         # 先把网关记住的最新意图明确刷成中位，再开许可。
         for _ in range(5):
@@ -688,13 +663,12 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             recorder=recorder,
             logger=logger,
-            start_depth_m=start_depth_m,
         )
         detail = exit_detail
         if exit_kind == "estop":
             raise DatasetDriveError(exit_detail)
 
-        # 正常结束的顺序是：回中 -> EOS 封装 -> 深度回收 -> 上锁。
+        # 正常结束的顺序是：回中 -> EOS 封装 -> 可选深度回收 -> 上锁。
         node.publish_neutral()
         video_path, recording_error = recorder.finalize(
             pump=lambda: _publish_neutral_with_health_check(node, config)
@@ -704,7 +678,19 @@ def main(argv: list[str] | None = None) -> int:
         health_error = _active_error(node, config)
         if health_error is not None:
             raise DatasetDriveError(f"录像封装后控制链不安全: {health_error}")
-        _recover_to_start(node, config, KeyCommandState(config), logger, start_depth_m)
+        current_depth_m = _current_depth(node)
+        if start_depth_m is not None and current_depth_m is not None:
+            _recover_to_start(
+                node,
+                config,
+                KeyCommandState(config),
+                logger,
+                start_depth_m,
+            )
+            recovery_completed = True
+        else:
+            node.publish_neutral()
+            detail = f"{detail}；无有效深度，跳过自动回收"
         disarm_error = node.request_normal_disarm(timeout_s=5.0)
         if disarm_error is not None:
             raise DatasetDriveError(f"正常上锁未确认: {disarm_error}")
@@ -714,7 +700,15 @@ def main(argv: list[str] | None = None) -> int:
             "上锁",
         )
         normal_completed = True
-        outcome = "completed" if exit_kind == "normal" else "recording_fault_recovered"
+        outcome = (
+            "completed"
+            if exit_kind == "normal"
+            else (
+                "recording_fault_recovered"
+                if recovery_completed
+                else "recording_fault_stopped"
+            )
+        )
         result_code = 0 if exit_kind == "normal" and recording_error is None else 2
     except KeyboardInterrupt:
         outcome = "emergency_stopped"
@@ -775,7 +769,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"会话目录: {session_directory}")
     if normal_completed:
-        print("录像已停止，ROV 已回到启动深度附近并正常上锁。")
+        if recovery_completed:
+            print("录像已停止，ROV 已回到启动深度附近并正常上锁。")
+        else:
+            print("录像已停止；因无有效深度跳过回收，ROV 已正常上锁。")
     return result_code
 
 

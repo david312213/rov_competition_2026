@@ -1,4 +1,4 @@
-"""数据集键盘控制、深度保护和假网关回归测试。"""
+"""数据集键盘控制、可选回收和假网关回归测试。"""
 
 from dataclasses import replace
 from pathlib import Path
@@ -8,13 +8,11 @@ from rov_competition.config import load_dataset_config
 from rov_competition.dataset_control import (
     DatasetControlError,
     DatasetRuntimeSnapshot,
-    DepthSafetyController,
     KeyCommandState,
     RecoveryController,
     active_safety_error,
     motion_from_keys,
     prearm_safety_error,
-    stable_start_depth,
 )
 from rov_competition.domain import MotionCommand
 
@@ -31,7 +29,7 @@ DATASET_EXAMPLE = (
 
 
 def _config():
-    """返回已填写水池绝对深度的测试配置。"""
+    """返回数据集键盘控制测试配置。"""
 
     return load_dataset_config(DATASET_EXAMPLE)
 
@@ -99,59 +97,6 @@ def test_power_adjustment_is_clamped_to_configured_bounds() -> None:
     assert state.strength == pytest.approx(0.05)
 
 
-def test_start_depth_gate_is_disabled_for_dataset_collection() -> None:
-    """采集模式记录深度，但不因浅水或短时波动拒绝启动。"""
-
-    config = _config()
-    assert stable_start_depth([0.20, 0.21, 0.19], config) == pytest.approx(0.20)
-    assert stable_start_depth([0.01, 0.02], config) == pytest.approx(0.015)
-    assert stable_start_depth([0.20, 0.30], config) == pytest.approx(0.25)
-
-    gated = replace(config, check_start_depth_at_start=True)
-    with pytest.raises(DatasetControlError, match="完全浸没"):
-        stable_start_depth([0.01, 0.02], gated)
-    with pytest.raises(DatasetControlError, match="尚未稳定"):
-        stable_start_depth([0.20, 0.30], gated)
-
-
-def test_absolute_and_relative_depth_limits_choose_the_shallower_one() -> None:
-    """绝对上限与启动后 1.40 m 上限中取较浅者。"""
-
-    relative_first = DepthSafetyController(_config(), start_depth_m=0.20)
-    assert relative_first.depth_limit_m == pytest.approx(1.40)
-
-    absolute_config = replace(_config(), maximum_depth_m=0.55)
-    absolute_first = DepthSafetyController(absolute_config, start_depth_m=0.20)
-    assert absolute_first.depth_limit_m == pytest.approx(0.55)
-
-
-def test_depth_guard_blocks_descent_and_recovers_if_already_over_limit() -> None:
-    """进入余量时只禁止下潜；已越界则停水平轴并小幅上升。"""
-
-    guard = DepthSafetyController(_config(), start_depth_m=0.20)
-    limited = guard.apply(
-        MotionCommand(forward=0.05, vertical=-0.05),
-        depth_valid=True,
-        depth_m=1.36,
-    )
-    assert limited.limited
-    assert limited.motion.forward == pytest.approx(0.05)
-    assert limited.motion.vertical == 0.0
-
-    over = guard.apply(
-        MotionCommand(forward=0.05, yaw=0.05),
-        depth_valid=True,
-        depth_m=1.42,
-    )
-    assert over.over_limit
-    assert over.motion.forward == 0.0
-    assert over.motion.yaw == 0.0
-    assert 0.0 < over.motion.vertical <= 0.05
-
-    with pytest.raises(DatasetControlError, match="深度数据无效"):
-        guard.apply(MotionCommand(), depth_valid=False, depth_m=0.0)
-
-
 def test_recovery_never_descends_when_already_shallower() -> None:
     """按 0 后只能上升或回中，绝不为追目标深度下潜。"""
 
@@ -180,8 +125,6 @@ def _snapshot(**changes) -> DatasetRuntimeSnapshot:
         status_age_s=0.10,
         heartbeat_valid=True,
         attitude_valid=True,
-        depth_valid=True,
-        depth_m=0.20,
         telemetry_mode="ALT_HOLD",
         status_mode="ALT_HOLD",
         preflight_passed=True,
@@ -220,7 +163,6 @@ def test_fake_gateway_accepts_clean_prearm_and_active_states() -> None:
     [
         ({"telemetry_age_s": 2.0}, "遥测数据过期"),
         ({"telemetry_mode": "MANUAL"}, "ALT_HOLD"),
-        ({"depth_valid": False}, "深度反馈无效"),
         ({"estop_latched": True}, "急停"),
         ({"command_source": "autonomy"}, "命令来源"),
         ({"allows_arming": False}, "ROS 解锁"),

@@ -1,13 +1,12 @@
 """数据集键盘遥控的纯 Python 逻辑。
 
 本模块不导入 ROS、Pygame 或 MAVLink，因此可以在不连实艇的
-电脑上测试按键映射、组合限幅、深度上限和回收上升。
+电脑上测试按键映射、组合限幅、链路状态和可选回收上升。
 """
 
 from __future__ import annotations
 
 import math
-import statistics
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -16,7 +15,7 @@ from .domain import MotionCommand
 
 
 class DatasetControlError(RuntimeError):
-    """键盘控制或深度保护无法继续时的明确异常。"""
+    """键盘控制或回收无法继续时的明确异常。"""
 
 
 MOVEMENT_KEYS = frozenset({"w", "s", "a", "d", "1", "2", "up", "down"})
@@ -34,8 +33,6 @@ class DatasetRuntimeSnapshot:
     status_age_s: float
     heartbeat_valid: bool
     attitude_valid: bool
-    depth_valid: bool
-    depth_m: float
     telemetry_mode: str
     status_mode: str
     preflight_passed: bool
@@ -73,8 +70,6 @@ def _runtime_common_error(
         return "飞控心跳无效"
     if not snapshot.attitude_valid:
         return "姿态遥测无效"
-    if not snapshot.depth_valid or not math.isfinite(snapshot.depth_m):
-        return "深度反馈无效"
     expected = config.allowed_flight_mode
     if snapshot.telemetry_mode.upper() != expected:
         return f"飞控必须保持 {expected}"
@@ -237,88 +232,6 @@ class KeyCommandState:
             self.strength,
             self.config.maximum_command,
         )
-
-
-def stable_start_depth(
-    samples: Iterable[float], config: DatasetCollectionConfig
-) -> float:
-    """取启动深度参考；现场可关闭最小深度和稳定性门控。"""
-
-    values = [float(value) for value in samples]
-    if not values or any(not math.isfinite(value) for value in values):
-        raise DatasetControlError("启动深度样本缺失或包含 NaN/Inf")
-    depth = float(statistics.median(values))
-    if config.check_start_depth_at_start:
-        if max(values) - min(values) > config.start_depth_max_variation_m:
-            raise DatasetControlError("启动深度尚未稳定")
-        if depth < config.minimum_start_depth_m:
-            raise DatasetControlError(
-                f"启动深度 {depth:.2f} m 小于完全浸没下限 "
-                f"{config.minimum_start_depth_m:.2f} m"
-            )
-    if config.maximum_depth_m is not None and depth >= config.maximum_depth_m:
-        raise DatasetControlError("启动时已达到或超过绝对最大深度")
-    return depth
-
-
-@dataclass(frozen=True)
-class DepthGuardResult:
-    """深度保护处理后的指令和界面说明。"""
-
-    motion: MotionCommand
-    limited: bool
-    over_limit: bool
-    message: str
-
-
-class DepthSafetyController:
-    """对手动下潜执行绝对+相对双重深度保护。"""
-
-    def __init__(self, config: DatasetCollectionConfig, start_depth_m: float) -> None:
-        self.config = config
-        self.start_depth_m = float(start_depth_m)
-        self.depth_limit_m = config.effective_depth_limit(self.start_depth_m)
-
-    def apply(
-        self, motion: MotionCommand, *, depth_valid: bool, depth_m: float
-    ) -> DepthGuardResult:
-        """拦截越界下潜；已越界时停止其他轴并小幅上升。"""
-
-        if not depth_valid or not math.isfinite(depth_m):
-            raise DatasetControlError("深度数据无效，禁止继续键盘控制")
-
-        safe_edge = self.depth_limit_m - self.config.depth_limit_margin_m
-        if depth_m > self.depth_limit_m:
-            ascent = _clamp(
-                (depth_m - safe_edge) * self.config.recovery_gain,
-                self.config.recovery_max_command,
-            )
-            return DepthGuardResult(
-                motion=MotionCommand(vertical=max(0.0, ascent)),
-                limited=True,
-                over_limit=True,
-                message=(
-                    f"深度 {depth_m:.2f} m 超过上限 "
-                    f"{self.depth_limit_m:.2f} m，停止水平运动并上升"
-                ),
-            )
-
-        if motion.vertical < 0.0 and depth_m >= safe_edge:
-            return DepthGuardResult(
-                motion=MotionCommand(
-                    forward=motion.forward,
-                    lateral=motion.lateral,
-                    vertical=0.0,
-                    yaw=motion.yaw,
-                ),
-                limited=True,
-                over_limit=False,
-                message=(
-                    f"已进入深度保护余量（{depth_m:.2f}/"
-                    f"{self.depth_limit_m:.2f} m），拒绝继续下潜"
-                ),
-            )
-        return DepthGuardResult(motion, False, False, "")
 
 
 @dataclass(frozen=True)

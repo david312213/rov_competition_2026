@@ -18,18 +18,15 @@ ROBOT_EXAMPLE = PACKAGE / "config" / "robot.example.yaml"
 DATASET_EXAMPLE = PACKAGE / "config" / "dataset.example.yaml"
 
 
-def test_dataset_template_uses_confirmed_pool_depth_with_relative_guard() -> None:
-    """至少 1.50 m 水深允许到 1.40 m，且保留相对下潜限制。"""
+def test_dataset_template_has_no_software_depth_limit() -> None:
+    """数据采集模板只限制键盘幅值，不包含软件深度上限。"""
 
     dataset = load_dataset_config(DATASET_EXAMPLE)
-    assert dataset.maximum_depth_m == pytest.approx(1.40)
-    assert dataset.maximum_descent_from_start_m == pytest.approx(1.40)
     assert dataset.initial_command == pytest.approx(0.20)
     assert dataset.maximum_command == pytest.approx(0.80)
-    assert dataset.check_start_depth_at_start is False
-    assert dataset.effective_depth_limit(0.20) == pytest.approx(1.40)
     errors = dataset.readiness_errors(load_robot_config(ROBOT_EXAMPLE))
-    assert not any("maximum_depth_m" in error for error in errors)
+    assert not any("深度" in error or "depth" in error.lower() for error in errors)
+    assert "depth_safety" not in DATASET_EXAMPLE.read_text(encoding="utf-8")
 
 
 def test_example_robot_configuration_is_safe_and_explicit() -> None:

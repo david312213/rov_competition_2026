@@ -116,7 +116,7 @@ def test_session_logger_writes_csv_and_reproducible_metadata(tmp_path: Path) -> 
         robot_config_path=robot,
         dataset_config_path=dataset,
     )
-    logger.set_depths(0.20, 0.70)
+    logger.set_start_depth(0.20)
     logger.write(
         event="command",
         keys={"w", "2"},
@@ -133,7 +133,7 @@ def test_session_logger_writes_csv_and_reproducible_metadata(tmp_path: Path) -> 
     metadata = json.loads((session / "session.json").read_text(encoding="utf-8"))
     assert metadata["outcome"] == "completed"
     assert metadata["start_depth_m"] == pytest.approx(0.20)
-    assert metadata["effective_depth_limit_m"] == pytest.approx(0.70)
+    assert "effective_depth_limit_m" not in metadata
     assert len(metadata["robot_config_sha256"]) == 64
     assert len(metadata["dataset_config_sha256"]) == 64
 

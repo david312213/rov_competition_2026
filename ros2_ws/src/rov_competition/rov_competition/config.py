@@ -245,7 +245,7 @@ class RobotConfig:
 
 @dataclass(frozen=True)
 class DatasetCollectionConfig:
-    """水池数据采集的键盘、深度与回收安全参数。
+    """水池数据采集的键盘、回收与链路安全参数。
 
     这些参数不包含电机通道或 PWM。键盘工具仍只发布四轴
     归一化运动意图，八推进器混控由 ArduSub 完成。
@@ -256,14 +256,6 @@ class DatasetCollectionConfig:
     maximum_command: float
     command_step: float
     publish_rate_hz: float
-
-    maximum_depth_m: float | None
-    maximum_descent_from_start_m: float
-    depth_limit_margin_m: float
-    check_start_depth_at_start: bool
-    minimum_start_depth_m: float
-    start_depth_stable_s: float
-    start_depth_max_variation_m: float
 
     recovery_gain: float
     recovery_max_command: float
@@ -294,30 +286,6 @@ class DatasetCollectionConfig:
         if not 5.0 <= self.publish_rate_hz <= 50.0:
             raise ConfigurationError("键盘控制发布频率必须在 5..50 Hz")
 
-        if self.maximum_depth_m is not None:
-            if not math.isfinite(self.maximum_depth_m) or self.maximum_depth_m <= 0.0:
-                raise ConfigurationError("maximum_depth_m 必须大于 0 或保持 null")
-        if (
-            not math.isfinite(self.maximum_descent_from_start_m)
-            or self.maximum_descent_from_start_m <= 0.0
-        ):
-            raise ConfigurationError("maximum_descent_from_start_m 必须大于 0")
-        if (
-            not math.isfinite(self.depth_limit_margin_m)
-            or not 0.0 <= self.depth_limit_margin_m
-            < self.maximum_descent_from_start_m
-        ):
-            raise ConfigurationError("深度保护余量必须在 [0, 相对下潜上限) 内")
-        if not math.isfinite(self.minimum_start_depth_m) or self.minimum_start_depth_m < 0.0:
-            raise ConfigurationError("最小启动深度不能为负数")
-        if (
-            self.maximum_depth_m is not None
-            and self.maximum_depth_m <= self.minimum_start_depth_m
-        ):
-            raise ConfigurationError("绝对最大深度必须大于最小启动深度")
-        if self.start_depth_stable_s <= 0.0 or self.start_depth_max_variation_m <= 0.0:
-            raise ConfigurationError("启动深度稳定时间和波动上限必须大于 0")
-
         recovery_values = (
             self.recovery_gain,
             self.recovery_max_command,
@@ -334,26 +302,10 @@ class DatasetCollectionConfig:
         if self.allowed_flight_mode != "ALT_HOLD":
             raise ConfigurationError("数据采集工具只允许 ALT_HOLD 模式")
 
-    def effective_depth_limit(self, start_depth_m: float) -> float:
-        """返回绝对上限与相对上限中更浅的一个。"""
-
-        if self.maximum_depth_m is None:
-            raise ConfigurationError(
-                "depth_safety.maximum_depth_m 仍为 null，禁止实艇解锁"
-            )
-        if not math.isfinite(start_depth_m):
-            raise ConfigurationError("启动深度必须是有限数")
-        return min(
-            self.maximum_depth_m,
-            start_depth_m + self.maximum_descent_from_start_m,
-        )
-
     def readiness_errors(self, robot: RobotConfig) -> tuple[str, ...]:
         """列出一键采集禁止解锁的全部配置原因。"""
 
         errors: list[str] = []
-        if self.maximum_depth_m is None:
-            errors.append("depth_safety.maximum_depth_m 尚未填写")
         if robot.control_profile != ControlProfile.COMMISSIONING:
             errors.append("robot.yaml 的 control.profile 必须是 commissioning")
         if self.allowed_flight_mode not in robot.allowed_flight_modes:
@@ -621,16 +573,8 @@ def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
 
     data = _read_yaml(path)
     manual = _mapping(data.get("manual_control", {}), "manual_control")
-    depth = _mapping(data.get("depth_safety", {}), "depth_safety")
     recovery = _mapping(data.get("recovery", {}), "recovery")
     safety = _mapping(data.get("safety", {}), "safety")
-
-    maximum_depth_value = depth.get("maximum_depth_m")
-    maximum_depth = (
-        None
-        if maximum_depth_value is None
-        else _finite(maximum_depth_value, "depth_safety.maximum_depth_m")
-    )
     return DatasetCollectionConfig(
         initial_command=_finite(
             manual.get("initial_command", 0.05), "manual_control.initial_command"
@@ -646,30 +590,6 @@ def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
         ),
         publish_rate_hz=_finite(
             manual.get("publish_rate_hz", 20.0), "manual_control.publish_rate_hz"
-        ),
-        maximum_depth_m=maximum_depth,
-        maximum_descent_from_start_m=_finite(
-            depth.get("maximum_descent_from_start_m", 0.50),
-            "depth_safety.maximum_descent_from_start_m",
-        ),
-        depth_limit_margin_m=_finite(
-            depth.get("limit_margin_m", 0.05), "depth_safety.limit_margin_m"
-        ),
-        check_start_depth_at_start=_boolean(
-            depth.get("check_start_depth_at_start", False),
-            "depth_safety.check_start_depth_at_start",
-        ),
-        minimum_start_depth_m=_finite(
-            depth.get("minimum_start_depth_m", 0.10),
-            "depth_safety.minimum_start_depth_m",
-        ),
-        start_depth_stable_s=_finite(
-            depth.get("start_depth_stable_s", 1.0),
-            "depth_safety.start_depth_stable_s",
-        ),
-        start_depth_max_variation_m=_finite(
-            depth.get("start_depth_max_variation_m", 0.05),
-            "depth_safety.start_depth_max_variation_m",
         ),
         recovery_gain=_finite(recovery.get("gain", 0.5), "recovery.gain"),
         recovery_max_command=_finite(

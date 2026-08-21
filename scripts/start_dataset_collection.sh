@@ -34,7 +34,7 @@ usage() {
   printf '%s\n' \
     '用法：./scripts/start_dataset_collection.sh' \
     '' \
-    '首次运行会生成 config/dataset.yaml：绝对上限 1.40 m，相对下潜上限 1.40 m。' \
+    '首次运行会自动生成 config/dataset.yaml；键盘采集不设置软件深度上限。' \
     '可用 ROV_IP=... 临时替换默认艇载地址 192.168.2.2。'
 }
 
@@ -110,10 +110,7 @@ if [[ ! -r "${DATASET_CONFIG}" ]]; then
   fi
   cp -- "${DATASET_EXAMPLE}" "${DATASET_CONFIG}"
   echo "已生成：${DATASET_CONFIG}"
-  echo "已按当前场地（水深至少 1.50 m）设置 maximum_depth_m=1.40。"
-  echo "相对启动深度最多允许继续下潜 1.40 m。"
-  echo "请打开文件核对场地后重新运行；更换水池必须重新填写。"
-  exit 2
+  echo "键盘采集不设置软件深度上限，本次继续启动。"
 fi
 
 # ROS 2 Humble 的环境脚本不保证兼容 nounset，只在 source 时临时关闭。

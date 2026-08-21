@@ -325,16 +325,16 @@ class DatasetSessionLogger:
             "dataset_config": str(dataset_path),
             "dataset_config_sha256": _sha256(dataset_path),
             "start_depth_m": None,
-            "effective_depth_limit_m": None,
             "video_file": None,
         }
         self._write_json()
 
-    def set_depths(self, start_depth_m: float, effective_limit_m: float) -> None:
-        """记录启动深度和本次实际生效的深度上限。"""
+    def set_start_depth(self, start_depth_m: float | None) -> None:
+        """记录可选启动深度；它不参与键盘驾驶限幅。"""
 
-        self.metadata["start_depth_m"] = float(start_depth_m)
-        self.metadata["effective_depth_limit_m"] = float(effective_limit_m)
+        self.metadata["start_depth_m"] = (
+            float(start_depth_m) if start_depth_m is not None else None
+        )
         self._write_json()
 
     def write(
