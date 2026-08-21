@@ -260,6 +260,7 @@ class DatasetCollectionConfig:
     maximum_depth_m: float | None
     maximum_descent_from_start_m: float
     depth_limit_margin_m: float
+    check_start_depth_at_start: bool
     minimum_start_depth_m: float
     start_depth_stable_s: float
     start_depth_max_variation_m: float
@@ -653,6 +654,10 @@ def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
         ),
         depth_limit_margin_m=_finite(
             depth.get("limit_margin_m", 0.05), "depth_safety.limit_margin_m"
+        ),
+        check_start_depth_at_start=_boolean(
+            depth.get("check_start_depth_at_start", False),
+            "depth_safety.check_start_depth_at_start",
         ),
         minimum_start_depth_m=_finite(
             depth.get("minimum_start_depth_m", 0.10),

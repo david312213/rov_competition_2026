@@ -39,20 +39,20 @@ def _config():
 @pytest.mark.parametrize(
     ("key", "expected"),
     [
-        ("w", MotionCommand(forward=0.05)),
-        ("s", MotionCommand(forward=-0.05)),
-        ("a", MotionCommand(lateral=-0.05)),
-        ("d", MotionCommand(lateral=0.05)),
-        ("1", MotionCommand(yaw=-0.05)),
-        ("2", MotionCommand(yaw=0.05)),
-        ("up", MotionCommand(vertical=0.05)),
-        ("down", MotionCommand(vertical=-0.05)),
+        ("w", MotionCommand(forward=0.20)),
+        ("s", MotionCommand(forward=-0.20)),
+        ("a", MotionCommand(lateral=-0.20)),
+        ("d", MotionCommand(lateral=0.20)),
+        ("1", MotionCommand(yaw=-0.20)),
+        ("2", MotionCommand(yaw=0.20)),
+        ("up", MotionCommand(vertical=0.20)),
+        ("down", MotionCommand(vertical=-0.20)),
     ],
 )
 def test_every_movement_key_has_one_clear_axis(key: str, expected: MotionCommand) -> None:
     """每个键只表达一个艇体运动意图。"""
 
-    assert motion_from_keys({key}, 0.05, 0.10) == expected
+    assert motion_from_keys({key}, 0.20, 0.30) == expected
 
 
 def test_opposite_keys_cancel_and_release_returns_to_neutral() -> None:
@@ -63,52 +63,59 @@ def test_opposite_keys_cancel_and_release_returns_to_neutral() -> None:
     state.press("s")
     assert state.motion().is_neutral()
     state.release("s")
-    assert state.motion().forward == pytest.approx(0.05)
+    assert state.motion().forward == pytest.approx(0.20)
     state.release("w")
     assert state.motion().is_neutral()
 
 
-def test_focus_loss_clear_and_combined_vector_limit() -> None:
-    """窗口失焦调用 clear 后回中，三轴组合不绕过总限幅。"""
+def test_focus_loss_clear_and_each_combined_axis_keeps_its_power() -> None:
+    """窗口失焦回中，三轴组合不会再把每轴功率平分。"""
 
     state = KeyCommandState(_config())
     for key in ("w", "d", "2"):
         state.press(key)
     motion = state.motion()
-    assert sum(abs(value) for value in (
-        motion.forward, motion.lateral, motion.vertical, motion.yaw
-    )) == pytest.approx(0.10)
-    assert motion.forward == pytest.approx(1.0 / 30.0)
+    assert motion.forward == pytest.approx(0.20)
+    assert motion.lateral == pytest.approx(0.20)
+    assert motion.yaw == pytest.approx(0.20)
+    assert all(
+        abs(value) <= 0.30
+        for value in (motion.forward, motion.lateral, motion.vertical, motion.yaw)
+    )
     state.clear()
     assert state.motion().is_neutral()
 
 
 def test_power_adjustment_is_clamped_to_configured_bounds() -> None:
-    """+/- 每次 0.01，无论按多少次都不越界。"""
+    """+/- 每次 0.05，无论按多少次都不越界。"""
 
     state = KeyCommandState(_config())
-    assert state.adjust(1) == pytest.approx(0.06)
+    assert state.adjust(1) == pytest.approx(0.25)
     for _ in range(30):
         state.adjust(1)
-    assert state.strength == pytest.approx(0.10)
+    assert state.strength == pytest.approx(0.30)
     for _ in range(30):
         state.adjust(-1)
-    assert state.strength == pytest.approx(0.01)
+    assert state.strength == pytest.approx(0.05)
 
 
-def test_start_depth_requires_immersion_and_stability() -> None:
-    """只有完全浸没且波动小的深度才能成为回收基准。"""
+def test_start_depth_gate_is_disabled_for_dataset_collection() -> None:
+    """采集模式记录深度，但不因浅水或短时波动拒绝启动。"""
 
     config = _config()
     assert stable_start_depth([0.20, 0.21, 0.19], config) == pytest.approx(0.20)
+    assert stable_start_depth([0.01, 0.02], config) == pytest.approx(0.015)
+    assert stable_start_depth([0.20, 0.30], config) == pytest.approx(0.25)
+
+    gated = replace(config, check_start_depth_at_start=True)
     with pytest.raises(DatasetControlError, match="完全浸没"):
-        stable_start_depth([0.01, 0.02], config)
+        stable_start_depth([0.01, 0.02], gated)
     with pytest.raises(DatasetControlError, match="尚未稳定"):
-        stable_start_depth([0.20, 0.30], config)
+        stable_start_depth([0.20, 0.30], gated)
 
 
 def test_absolute_and_relative_depth_limits_choose_the_shallower_one() -> None:
-    """绝对上限与启动后 1.20 m 上限中取较浅者。"""
+    """绝对上限与启动后 1.40 m 上限中取较浅者。"""
 
     relative_first = DepthSafetyController(_config(), start_depth_m=0.20)
     assert relative_first.depth_limit_m == pytest.approx(1.40)

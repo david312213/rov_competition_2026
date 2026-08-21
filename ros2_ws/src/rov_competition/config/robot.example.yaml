@@ -28,8 +28,8 @@ control:
   expected_frame_config: null
   expected_motor_count: 8
 
-  # 第一次固定架点动只使用 0.05；确认方向后最大也先保持 0.10。
-  command_limit: 0.10
+  # 数据采集实测 0.10 处于死区附近；采集工具允许到 0.30。
+  command_limit: 0.30
   maximum_command_age_s: 0.25
   slew_rate_per_s: 0.5
   command_timeout_s: 0.5

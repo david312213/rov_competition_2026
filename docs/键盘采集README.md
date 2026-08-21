@@ -29,7 +29,7 @@ mavlink:
 control:
   profile: "commissioning"
   allowed_flight_modes: ["ALT_HOLD"]
-  command_limit: 0.10
+  command_limit: 0.30
 
 safety:
   allow_live_actuation: true
@@ -54,7 +54,8 @@ config/dataset.yaml
 ```yaml
 depth_safety:
   maximum_depth_m: 1.40
-  maximum_descent_from_start_m: 1.20
+  maximum_descent_from_start_m: 1.40
+  check_start_depth_at_start: false
 ```
 
 这个数值只适用于当前水池。更换场地、改变载荷或无法保证底部余量时，
@@ -62,7 +63,7 @@ depth_safety:
 
 ```text
 水池绝对最大深度
-启动深度 + maximum_descent_from_start_m（默认 1.20 m）
+启动深度 + maximum_descent_from_start_m（默认 1.40 m）
 ```
 
 ### 3. QGC 设置
@@ -134,14 +135,17 @@ START DATASET ROV
 | `A / D` | 左移 / 右移 |
 | `1 / 2` | 左转 / 右转 |
 | `↑ / ↓` | 上升 / 下潜 |
-| `+ / -` | 指令每次增加 / 减少 `0.01` |
+| `+ / -` | 指令每次增加 / 减少 `0.05` |
 | `Space` | 四轴立即回中，保持当前深度 |
 | `0` | 正常停录像、回启动深度并上锁 |
 | `Esc`、关闭窗口、`Ctrl+C` | 急停并尝试上锁 |
 
-默认指令为 `0.05`，上限为 `0.10`。只有按住才运动，松开立即回中；
-窗口失去焦点也立即回中。允许组合键，但组合向量会统一缩放，不能绕过
-网关限幅。
+默认指令为 `0.20`，上限为 `0.30`。只有按住才运动，松开立即回中；
+窗口失去焦点也立即回中。组合键的各运动轴保留相同指令强度，八推进器
+混控和最终输出饱和由 ArduSub 处理；每个轴仍受网关 `0.30` 限幅。
+
+默认不使用“启动深度够不够深、短时间内是否稳定”作为启动门槛，但仍须
+收到有效深度，供最大深度保护和按 `0` 回收使用。
 
 工具不会自动沉底。必须由操作员按 `↓` 手动下潜，而且深度保护始终生效。
 

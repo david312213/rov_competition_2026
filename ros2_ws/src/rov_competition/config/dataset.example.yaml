@@ -5,10 +5,11 @@
 
 manual_control:
   # W/A/S/D、1/2 和上下方向键的归一化运动指令。
-  initial_command: 0.05
-  minimum_command: 0.01
-  maximum_command: 0.10
-  command_step: 0.01
+  # 0.10 实测位于推进器死区附近，改为 0.20 起步、0.30 上限。
+  initial_command: 0.20
+  minimum_command: 0.05
+  maximum_command: 0.30
+  command_step: 0.05
   publish_rate_hz: 20.0
 
 depth_safety:
@@ -17,18 +18,20 @@ depth_safety:
   maximum_depth_m: 1.40
 
   # 即使绝对深度填错，也不允许相对启动深度无限下潜。
-  maximum_descent_from_start_m: 1.20
+  maximum_descent_from_start_m: 1.40
   limit_margin_m: 0.05
 
-  # 启动时必须已经完全浸没，且深度在指定时间内足够稳定。
+  # 数据采集不再用启动深度数值拒绝解锁；仍记录有限的
+  # 真实深度，用于运行中上限和按 0 回收。
+  check_start_depth_at_start: false
   minimum_start_depth_m: 0.10
-  start_depth_stable_s: 1.0
+  start_depth_stable_s: 0.20
   start_depth_max_variation_m: 0.05
 
 recovery:
   # 按 0 后只会上升回启动深度，绝不会为了追深度而重新下潜。
   gain: 0.50
-  maximum_command: 0.05
+  maximum_command: 0.20
   tolerance_m: 0.05
   settle_s: 1.0
   timeout_s: 60.0

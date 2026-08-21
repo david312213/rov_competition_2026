@@ -154,8 +154,9 @@ def motion_from_keys(
 ) -> MotionCommand:
     """将当前按住的键转换为四轴指令。
 
-    相反键会自然抵消。多轴同时使用时按 L1 和统一缩放，
-    使所有轴绝对值之和不超过网关限幅。
+    相反键会自然抵消。每个轴独立限幅，因此“下潜+转向”
+    不会再被平分成两个过小指令；八推进器的组合和饱和
+    仍由 ArduSub 控制分配。
     """
 
     if not math.isfinite(strength) or strength <= 0.0:
@@ -170,10 +171,7 @@ def motion_from_keys(
         strength * (("up" in held) - ("down" in held)),
         strength * (("2" in held) - ("1" in held)),
     ]
-    total = sum(abs(value) for value in values)
-    if total > combined_limit:
-        scale = combined_limit / total
-        values = [value * scale for value in values]
+    values = [_clamp(value, combined_limit) for value in values]
     return MotionCommand(
         forward=values[0],
         lateral=values[1],
@@ -244,19 +242,20 @@ class KeyCommandState:
 def stable_start_depth(
     samples: Iterable[float], config: DatasetCollectionConfig
 ) -> float:
-    """从一段实测深度中取中位数，并拒绝未浸没或波动。"""
+    """取启动深度参考；现场可关闭最小深度和稳定性门控。"""
 
     values = [float(value) for value in samples]
     if not values or any(not math.isfinite(value) for value in values):
         raise DatasetControlError("启动深度样本缺失或包含 NaN/Inf")
-    if max(values) - min(values) > config.start_depth_max_variation_m:
-        raise DatasetControlError("启动深度尚未稳定")
     depth = float(statistics.median(values))
-    if depth < config.minimum_start_depth_m:
-        raise DatasetControlError(
-            f"启动深度 {depth:.2f} m 小于完全浸没下限 "
-            f"{config.minimum_start_depth_m:.2f} m"
-        )
+    if config.check_start_depth_at_start:
+        if max(values) - min(values) > config.start_depth_max_variation_m:
+            raise DatasetControlError("启动深度尚未稳定")
+        if depth < config.minimum_start_depth_m:
+            raise DatasetControlError(
+                f"启动深度 {depth:.2f} m 小于完全浸没下限 "
+                f"{config.minimum_start_depth_m:.2f} m"
+            )
     if config.maximum_depth_m is not None and depth >= config.maximum_depth_m:
         raise DatasetControlError("启动时已达到或超过绝对最大深度")
     return depth

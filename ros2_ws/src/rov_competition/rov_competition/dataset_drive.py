@@ -247,7 +247,7 @@ def _active_error(
 def _collect_start_depth(
     node: DatasetDriveNode, config: DatasetCollectionConfig
 ) -> float:
-    """收集一段连续真实深度，拒绝波动或未浸没状态。"""
+    """记录启动深度，用于相对上限和按 0 回收。"""
 
     samples: list[float] = []
     deadline = time.monotonic() + config.start_depth_stable_s
