@@ -33,6 +33,7 @@ class DatasetRuntimeSnapshot:
     status_age_s: float
     heartbeat_valid: bool
     attitude_valid: bool
+    attitude_age_s: float
     telemetry_mode: str
     status_mode: str
     preflight_passed: bool
@@ -69,7 +70,14 @@ def _runtime_common_error(
     if not snapshot.heartbeat_valid:
         return "飞控心跳无效"
     if not snapshot.attitude_valid:
-        return "姿态遥测无效"
+        if not math.isfinite(snapshot.attitude_age_s):
+            return "尚未收到过有效姿态遥测"
+        if snapshot.attitude_age_s > config.maximum_attitude_age_s:
+            return (
+                "姿态遥测连续无效 "
+                f"{snapshot.attitude_age_s:.2f}s，超过允许的 "
+                f"{config.maximum_attitude_age_s:.2f}s"
+            )
     expected = config.allowed_flight_mode
     if snapshot.telemetry_mode.upper() != expected:
         return f"飞控必须保持 {expected}"

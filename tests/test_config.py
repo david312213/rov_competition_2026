@@ -24,6 +24,7 @@ def test_dataset_template_has_no_software_depth_limit() -> None:
     dataset = load_dataset_config(DATASET_EXAMPLE)
     assert dataset.initial_command == pytest.approx(0.20)
     assert dataset.maximum_command == pytest.approx(0.80)
+    assert dataset.maximum_attitude_age_s == pytest.approx(3.0)
     errors = dataset.readiness_errors(load_robot_config(ROBOT_EXAMPLE))
     assert not any("深度" in error or "depth" in error.lower() for error in errors)
     assert "depth_safety" not in DATASET_EXAMPLE.read_text(encoding="utf-8")

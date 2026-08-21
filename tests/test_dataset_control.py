@@ -125,6 +125,7 @@ def _snapshot(**changes) -> DatasetRuntimeSnapshot:
         status_age_s=0.10,
         heartbeat_valid=True,
         attitude_valid=True,
+        attitude_age_s=0.10,
         telemetry_mode="ALT_HOLD",
         status_mode="ALT_HOLD",
         preflight_passed=True,
@@ -182,6 +183,22 @@ def test_fake_gateway_detects_runtime_permission_and_arm_rejection() -> None:
     error = active_safety_error(_snapshot(), _config())
     assert error is not None
     assert "运行时" in error
+
+
+def test_short_attitude_dropout_is_tolerated_but_long_dropout_stops() -> None:
+    """偶发姿态丢包不打断采集，连续超时仍返回明确原因。"""
+
+    config = _config()
+    brief = _snapshot(attitude_valid=False, attitude_age_s=2.9)
+    assert prearm_safety_error(brief, config) is None
+
+    stale = _snapshot(attitude_valid=False, attitude_age_s=3.1)
+    error = prearm_safety_error(stale, config)
+    assert error is not None
+    assert "姿态遥测连续无效" in error
+
+    never_received = _snapshot(attitude_valid=False, attitude_age_s=float("inf"))
+    assert "尚未收到过" in prearm_safety_error(never_received, config)
 
 
 def test_recovery_timeout_and_invalid_depth_are_hard_failures() -> None:

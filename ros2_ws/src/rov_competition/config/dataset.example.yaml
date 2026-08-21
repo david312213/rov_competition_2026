@@ -24,4 +24,7 @@ recovery:
 safety:
   maximum_telemetry_age_s: 0.75
   maximum_status_age_s: 0.75
+  # ATTITUDE 偶发丢包时继续使用飞控自身的 ALT_HOLD；连续 3 秒无有效
+  # 姿态才中止。心跳断链仍按 robot.yaml 的更短阈值优先停车。
+  maximum_attitude_age_s: 3.0
   allowed_flight_mode: "ALT_HOLD"

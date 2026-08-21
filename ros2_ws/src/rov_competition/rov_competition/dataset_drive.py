@@ -19,6 +19,7 @@ import rclpy
 from rclpy.client import Client
 from rclpy.signals import SignalHandlerOptions
 from rclpy.utilities import remove_ros_args
+from rov_interfaces.msg import RobotTelemetry
 from rov_interfaces.srv import SetArmed
 from std_srvs.srv import SetBool, Trigger
 
@@ -96,12 +97,20 @@ class DatasetDriveNode(CommissioningNode):
     """在通用实艇运行时上增加许可、解锁和急停服务。"""
 
     def __init__(self, source: str = SOURCE) -> None:
+        self.last_valid_attitude_at: float | None = None
         super().__init__("rov_dataset_drive", source)
         self.enable_client = self.create_client(SetBool, "/rov/control/set_enabled")
         self.arm_client = self.create_client(SetArmed, "/rov/control/set_armed")
         self.estop_client = self.create_client(
             Trigger, "/rov/control/emergency_stop"
         )
+
+    def _telemetry(self, message: RobotTelemetry) -> None:
+        """缓存遥测，并记住最近一次有效姿态的本机接收时间。"""
+
+        super()._telemetry(message)
+        if message.valid_attitude:
+            self.last_valid_attitude_at = time.monotonic()
 
     def spin(self, timeout_s: float = 0.0) -> None:
         """处理 ROS 回调。"""
@@ -203,6 +212,11 @@ def _runtime_snapshot(node: DatasetDriveNode) -> DatasetRuntimeSnapshot:
         status_age_s=now - node.status_received_at,
         heartbeat_valid=bool(telemetry.valid_heartbeat),
         attitude_valid=bool(telemetry.valid_attitude),
+        attitude_age_s=(
+            math.inf
+            if node.last_valid_attitude_at is None
+            else now - node.last_valid_attitude_at
+        ),
         telemetry_mode=str(telemetry.flight_mode),
         status_mode=str(status.flight_mode),
         preflight_passed=bool(status.preflight_passed),

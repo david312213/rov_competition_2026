@@ -265,6 +265,7 @@ class DatasetCollectionConfig:
 
     maximum_telemetry_age_s: float
     maximum_status_age_s: float
+    maximum_attitude_age_s: float
     allowed_flight_mode: str
 
     def __post_init__(self) -> None:
@@ -294,6 +295,7 @@ class DatasetCollectionConfig:
             self.recovery_timeout_s,
             self.maximum_telemetry_age_s,
             self.maximum_status_age_s,
+            self.maximum_attitude_age_s,
         )
         if any(not math.isfinite(value) or value <= 0.0 for value in recovery_values):
             raise ConfigurationError("回收控制和数据新鲜度参数必须大于 0")
@@ -611,6 +613,10 @@ def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
         maximum_status_age_s=_finite(
             safety.get("maximum_status_age_s", 0.75),
             "safety.maximum_status_age_s",
+        ),
+        maximum_attitude_age_s=_finite(
+            safety.get("maximum_attitude_age_s", 3.0),
+            "safety.maximum_attitude_age_s",
         ),
         allowed_flight_mode=str(
             safety.get("allowed_flight_mode", "ALT_HOLD")

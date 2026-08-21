@@ -344,7 +344,7 @@ if ! kill -0 "${BRIDGE_PID}" 2>/dev/null; then
 fi
 
 echo
-echo "后台就绪。下一步会检查录像、ALT_HOLD、深度和预检，然后要求确认词。"
+echo "后台就绪。下一步会检查录像、ALT_HOLD、链路和预检，然后要求确认词。"
 set +e
 ros2 run rov_competition rov_dataset_drive \
   --robot-config "${ROBOT_CONFIG}" \
