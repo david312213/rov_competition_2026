@@ -25,9 +25,24 @@ def test_dataset_template_has_no_software_depth_limit() -> None:
     assert dataset.initial_command == pytest.approx(0.20)
     assert dataset.maximum_command == pytest.approx(0.80)
     assert dataset.maximum_attitude_age_s == pytest.approx(3.0)
+    assert dataset.maximum_status_age_s == pytest.approx(2.0)
     errors = dataset.readiness_errors(load_robot_config(ROBOT_EXAMPLE))
     assert not any("深度" in error or "depth" in error.lower() for error in errors)
     assert "depth_safety" not in DATASET_EXAMPLE.read_text(encoding="utf-8")
+
+
+def test_legacy_dataset_status_timeout_is_raised_to_desktop_minimum(
+    tmp_path: Path,
+) -> None:
+    """旧现场配置的 0.75 秒阈值也应自动获得 2 秒调度余量。"""
+
+    source = DATASET_EXAMPLE.read_text(encoding="utf-8")
+    legacy = tmp_path / "dataset.yaml"
+    legacy.write_text(
+        source.replace("maximum_status_age_s: 2.0", "maximum_status_age_s: 0.75"),
+        encoding="utf-8",
+    )
+    assert load_dataset_config(legacy).maximum_status_age_s == pytest.approx(2.0)
 
 
 def test_example_robot_configuration_is_safe_and_explicit() -> None:

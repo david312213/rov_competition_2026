@@ -113,9 +113,17 @@ class DatasetDriveNode(CommissioningNode):
             self.last_valid_attitude_at = time.monotonic()
 
     def spin(self, timeout_s: float = 0.0) -> None:
-        """处理 ROS 回调。"""
+        """处理 ROS 回调，并清掉短暂停顿后积压的少量消息。
+
+        Pygame 窗口和磁盘日志偶尔会让主线程暂停几十到几百毫秒。
+        如果每帧只处理一个回调，遥测回调可能先于控制状态回调，随后
+        立即执行的新鲜度检查就会把仍在 DDS 队列里的状态误判为过期。
+        第一次允许等待，后续非阻塞地再处理最多七个就绪回调。
+        """
 
         rclpy.spin_once(self, timeout_sec=timeout_s)
+        for _ in range(7):
+            rclpy.spin_once(self, timeout_sec=0.0)
 
     def _call(
         self,

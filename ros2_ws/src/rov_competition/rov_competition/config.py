@@ -577,6 +577,17 @@ def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
     manual = _mapping(data.get("manual_control", {}), "manual_control")
     recovery = _mapping(data.get("recovery", {}), "recovery")
     safety = _mapping(data.get("safety", {}), "safety")
+    # 老版本模板把该值设为 0.75s。图形线程短暂停顿后，ROS 的
+    # telemetry/status 回调可能同时排队，过小阈值会在处理完第一个回调后
+    # 误判第二个仍然过期。采集工具固定保证至少 2s 的桌面调度余量；
+    # 网关自己的命令超时、飞控心跳和急停不由这个值控制。
+    status_age_limit = max(
+        2.0,
+        _finite(
+            safety.get("maximum_status_age_s", 2.0),
+            "safety.maximum_status_age_s",
+        ),
+    )
     return DatasetCollectionConfig(
         initial_command=_finite(
             manual.get("initial_command", 0.05), "manual_control.initial_command"
@@ -610,10 +621,7 @@ def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
             safety.get("maximum_telemetry_age_s", 0.75),
             "safety.maximum_telemetry_age_s",
         ),
-        maximum_status_age_s=_finite(
-            safety.get("maximum_status_age_s", 0.75),
-            "safety.maximum_status_age_s",
-        ),
+        maximum_status_age_s=status_age_limit,
         maximum_attitude_age_s=_finite(
             safety.get("maximum_attitude_age_s", 3.0),
             "safety.maximum_attitude_age_s",

@@ -162,7 +162,8 @@ def test_fake_gateway_accepts_clean_prearm_and_active_states() -> None:
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"telemetry_age_s": 2.0}, "遥测数据过期"),
+        ({"telemetry_age_s": 2.0}, "遥测数据过期 2.00s"),
+        ({"status_age_s": 2.1}, "控制状态过期 2.10s"),
         ({"telemetry_mode": "MANUAL"}, "ALT_HOLD"),
         ({"estop_latched": True}, "急停"),
         ({"command_source": "autonomy"}, "命令来源"),

@@ -61,12 +61,18 @@ def _runtime_common_error(
         not math.isfinite(snapshot.telemetry_age_s)
         or snapshot.telemetry_age_s > config.maximum_telemetry_age_s
     ):
-        return "遥测数据过期"
+        return (
+            f"遥测数据过期 {snapshot.telemetry_age_s:.2f}s，"
+            f"阈值 {config.maximum_telemetry_age_s:.2f}s"
+        )
     if (
         not math.isfinite(snapshot.status_age_s)
         or snapshot.status_age_s > config.maximum_status_age_s
     ):
-        return "控制状态过期"
+        return (
+            f"控制状态过期 {snapshot.status_age_s:.2f}s，"
+            f"阈值 {config.maximum_status_age_s:.2f}s"
+        )
     if not snapshot.heartbeat_valid:
         return "飞控心跳无效"
     if not snapshot.attitude_valid:
