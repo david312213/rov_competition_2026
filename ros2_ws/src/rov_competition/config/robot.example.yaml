@@ -28,8 +28,8 @@ control:
   expected_frame_config: null
   expected_motor_count: 8
 
-  # 数据采集实测 0.10 处于死区附近；采集工具允许到 0.30。
-  command_limit: 0.30
+  # 数据采集实测 0.10 处于死区附近；采集工具允许逐级调到 0.80。
+  command_limit: 0.80
   maximum_command_age_s: 0.25
   slew_rate_per_s: 0.5
   command_timeout_s: 0.5

@@ -5,10 +5,11 @@
 
 manual_control:
   # W/A/S/D、1/2 和上下方向键的归一化运动指令。
-  # 0.10 实测位于推进器死区附近，改为 0.20 起步、0.30 上限。
+  # 0.10 实测位于推进器死区附近。默认仍从 0.20 起步，
+  # 操作员确认方向与停车正常后，才可逐级增加到 0.80。
   initial_command: 0.20
   minimum_command: 0.05
-  maximum_command: 0.30
+  maximum_command: 0.80
   command_step: 0.05
   publish_rate_hz: 20.0
 

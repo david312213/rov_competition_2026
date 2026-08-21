@@ -249,7 +249,7 @@ def test_rc_release_uses_65534_for_channels_nine_to_eighteen() -> None:
 
 
 def test_first_command_is_slew_limited_then_reaches_configured_limit() -> None:
-    """首次输出按 0.05s 起步，再缓升到配置的 0.30 上限。"""
+    """首次输出按 0.05s 起步，再缓升到配置的 0.80 上限。"""
 
     vehicle, master = make_vehicle(live=True)
     vehicle._telemetry.armed = True
@@ -258,9 +258,11 @@ def test_first_command_is_slew_limited_then_reaches_configured_limit() -> None:
     assert master.mav.manual_controls[-1][1] == 25
     second = vehicle.send_motion(MotionCommand(forward=1.0), now=10.05)
     assert second.forward == pytest.approx(0.05)
-    final = vehicle.send_motion(MotionCommand(forward=1.0), now=11.05)
-    assert final.forward == pytest.approx(0.30)
-    assert master.mav.manual_controls[-1][1] == 300
+    third = vehicle.send_motion(MotionCommand(forward=1.0), now=11.05)
+    assert third.forward == pytest.approx(0.55)
+    final = vehicle.send_motion(MotionCommand(forward=1.0), now=12.05)
+    assert final.forward == pytest.approx(0.80)
+    assert master.mav.manual_controls[-1][1] == 800
 
 
 def test_command_timeout_and_non_finite_input_are_detected() -> None:

@@ -52,7 +52,7 @@ def _config():
 def test_every_movement_key_has_one_clear_axis(key: str, expected: MotionCommand) -> None:
     """每个键只表达一个艇体运动意图。"""
 
-    assert motion_from_keys({key}, 0.20, 0.30) == expected
+    assert motion_from_keys({key}, 0.20, 0.80) == expected
 
 
 def test_opposite_keys_cancel_and_release_returns_to_neutral() -> None:
@@ -79,7 +79,7 @@ def test_focus_loss_clear_and_each_combined_axis_keeps_its_power() -> None:
     assert motion.lateral == pytest.approx(0.20)
     assert motion.yaw == pytest.approx(0.20)
     assert all(
-        abs(value) <= 0.30
+        abs(value) <= 0.80
         for value in (motion.forward, motion.lateral, motion.vertical, motion.yaw)
     )
     state.clear()
@@ -93,7 +93,7 @@ def test_power_adjustment_is_clamped_to_configured_bounds() -> None:
     assert state.adjust(1) == pytest.approx(0.25)
     for _ in range(30):
         state.adjust(1)
-    assert state.strength == pytest.approx(0.30)
+    assert state.strength == pytest.approx(0.80)
     for _ in range(30):
         state.adjust(-1)
     assert state.strength == pytest.approx(0.05)

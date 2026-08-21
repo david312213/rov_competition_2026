@@ -25,7 +25,7 @@ def test_dataset_template_uses_confirmed_pool_depth_with_relative_guard() -> Non
     assert dataset.maximum_depth_m == pytest.approx(1.40)
     assert dataset.maximum_descent_from_start_m == pytest.approx(1.40)
     assert dataset.initial_command == pytest.approx(0.20)
-    assert dataset.maximum_command == pytest.approx(0.30)
+    assert dataset.maximum_command == pytest.approx(0.80)
     assert dataset.check_start_depth_at_start is False
     assert dataset.effective_depth_limit(0.20) == pytest.approx(1.40)
     errors = dataset.readiness_errors(load_robot_config(ROBOT_EXAMPLE))
@@ -43,7 +43,7 @@ def test_example_robot_configuration_is_safe_and_explicit() -> None:
     assert config.expected_motor_count == 8
     assert config.control_protocol == ControlProtocol.MANUAL_CONTROL
     assert config.control_profile == ControlProfile.COMMISSIONING
-    assert config.command_limit == pytest.approx(0.30)
+    assert config.command_limit == pytest.approx(0.80)
     assert config.rc_override.channels["forward"] == 5
     assert set(config.axis_directions) == {
         "forward",
