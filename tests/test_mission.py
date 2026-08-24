@@ -94,12 +94,14 @@ def reach_scanning(task: AutonomousGraspMission) -> tuple[float, int]:
     decision = task.acknowledge_gripper(
         GripperAction.OPEN, True, "accepted", first, 0.01
     )
+    assert decision.state == MissionState.PREPARING
+    decision = task.step(first, 0.01 + task.config.gripper_hold_s)
     assert decision.state == MissionState.DESCENDING
     assert decision.target_depth_m == pytest.approx(1.30)
-    task.step(observation(1, depth=1.30), 0.02)
-    decision = task.step(observation(2, depth=1.30), 0.13)
+    task.step(observation(1, depth=1.30), 0.12)
+    decision = task.step(observation(2, depth=1.30), 0.23)
     assert decision.state == MissionState.SCANNING
-    return 0.13, 2
+    return 0.23, 2
 
 
 def reach_approaching(task: AutonomousGraspMission) -> tuple[float, int]:
@@ -136,8 +138,11 @@ def test_relative_descent_is_start_depth_plus_point_three_metres() -> None:
     decision = task.acknowledge_gripper(
         GripperAction.OPEN, True, "accepted", first, 0.01
     )
+    assert decision.state == MissionState.PREPARING
+    assert decision.motion.is_neutral()
+    decision = task.step(first, 0.01 + task.config.gripper_hold_s)
     assert decision.target_depth_m == pytest.approx(2.40)
-    decision = task.step(observation(1, depth=2.10), 0.02)
+    decision = task.step(observation(1, depth=2.10), 0.12)
     assert decision.motion.vertical < 0.0
     assert abs(decision.motion.vertical) <= TEST_CONFIG.descent_max_command
 

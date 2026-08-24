@@ -1,7 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>rov_interfaces</name>
-  <version>0.2.1</version>
+  <!-- ROS 清单要求 X.Y.Z；候选版完整名称见根目录 VERSION。 -->
+  <version>0.2.0</version>
   <description>2026 ROV 作业赛道控制、遥测与检测接口。</description>
   <maintainer email="team@example.invalid">ROV Team</maintainer>
   <license>Proprietary</license>

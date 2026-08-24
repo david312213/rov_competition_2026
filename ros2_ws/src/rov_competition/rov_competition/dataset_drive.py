@@ -27,7 +27,6 @@ from .commissioning_runtime import CommissioningNode
 from .config import (
     ConfigurationError,
     DatasetCollectionConfig,
-    RobotConfig,
     load_dataset_config,
     load_robot_config,
 )
@@ -87,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--session-dir", help="当次 output/datasets/<time> 目录")
     parser.add_argument("--project-dir", default=str(Path.cwd()))
-    parser.add_argument("--record-port", type=int, default=5702)
+    parser.add_argument("--record-port", type=int, default=5704)
     parser.add_argument("--payload-type", type=int, default=96)
     parser.add_argument("--execute", action="store_true")
     return parser
@@ -96,9 +95,20 @@ def build_parser() -> argparse.ArgumentParser:
 class DatasetDriveNode(CommissioningNode):
     """在通用实艇运行时上增加许可、解锁和急停服务。"""
 
-    def __init__(self, source: str = SOURCE) -> None:
+    def __init__(
+        self,
+        source: str = SOURCE,
+        *,
+        node_name: str = "rov_dataset_drive",
+    ) -> None:
+        """创建 commissioning 安全节点。
+
+        键盘采集继续使用默认节点名；搜索水池测试复用同一套许可、解锁、
+        急停和新鲜度检查，但必须使用独立节点名，方便脚本检测来源冲突。
+        """
+
         self.last_valid_attitude_at: float | None = None
-        super().__init__("rov_dataset_drive", source)
+        super().__init__(node_name, source)
         self.enable_client = self.create_client(SetBool, "/rov/control/set_enabled")
         self.arm_client = self.create_client(SetArmed, "/rov/control/set_armed")
         self.estop_client = self.create_client(
@@ -246,21 +256,32 @@ def _prearm_error(
     config: DatasetCollectionConfig,
     *,
     require_disarmed: bool,
+    allow_gripper: bool = False,
 ) -> str | None:
     """检查开启许可之前的状态。"""
 
     snapshot = _runtime_snapshot(node)
     if require_disarmed:
-        return prearm_safety_error(snapshot, config, source=SOURCE)
+        return prearm_safety_error(
+            snapshot, config, source=SOURCE, allow_gripper=allow_gripper
+        )
     return None
 
 
 def _active_error(
-    node: DatasetDriveNode, config: DatasetCollectionConfig
+    node: DatasetDriveNode,
+    config: DatasetCollectionConfig,
+    *,
+    allow_gripper: bool = False,
 ) -> str | None:
     """每个控制周期检查遥测、模式、来源与解锁状态。"""
 
-    return active_safety_error(_runtime_snapshot(node), config, source=SOURCE)
+    return active_safety_error(
+        _runtime_snapshot(node),
+        config,
+        source=SOURCE,
+        allow_gripper=allow_gripper,
+    )
 
 
 def _current_depth(node: DatasetDriveNode) -> float | None:
@@ -281,12 +302,15 @@ def _publish_neutral_once(node: DatasetDriveNode) -> None:
 
 
 def _publish_neutral_with_health_check(
-    node: DatasetDriveNode, config: DatasetCollectionConfig
+    node: DatasetDriveNode,
+    config: DatasetCollectionConfig,
+    *,
+    allow_gripper: bool = False,
 ) -> None:
     """封装录像时继续回中，但任一飞控故障立即打断等待。"""
 
     node.spin(0.0)
-    error = _active_error(node, config)
+    error = _active_error(node, config, allow_gripper=allow_gripper)
     if error is not None:
         raise DatasetDriveError(error)
     node.publish(MotionCommand.neutral())

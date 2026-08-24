@@ -32,6 +32,8 @@ MAV_MODE_FLAG_SAFETY_ARMED = 128
 MAV_TYPE_GCS = 6
 MAV_AUTOPILOT_INVALID = 8
 MAV_STATE_ACTIVE = 4
+GRIPPER_TEST_CONFIRMATION = "TEST GRIPPER"
+EXTENDED_PWM_CONFIRMATION = "ALLOW EXTENDED PWM"
 
 
 class VehicleError(RuntimeError):
@@ -57,6 +59,9 @@ class MavlinkVehicle:
         self._last_motion_command_at: float | None = None
         self._last_output_at: float | None = None
         self._last_output_command = MotionCommand.neutral()
+        self._gripper_action = GripperAction.NONE
+        self._gripper_pending_steps: list[tuple[tuple[int, int], ...]] = []
+        self._gripper_next_step_at: float | None = None
         self._preflight_report: PreflightReport | None = None
         self._closed = False
 
@@ -149,10 +154,12 @@ class MavlinkVehicle:
         """
 
         if self._master is None:
+            self.cancel_gripper()
             self._closed = True
             return
         errors: list[str] = []
         try:
+            self.cancel_gripper()
             if self.config.allow_live_actuation:
                 try:
                     self.stop_motion(force=True)
@@ -286,6 +293,9 @@ class MavlinkVehicle:
         """
 
         self._require_live_actuation()
+        # 急停或正常结束都必须先停止后续渐变步骤，避免上锁过程中又发出
+        # 一个迟到的机械爪 PWM。这里不会猜测“安全 PWM”，只停止发送。
+        self.cancel_gripper()
         errors: list[str] = []
         try:
             self.stop_motion(force=True)
@@ -359,39 +369,218 @@ class MavlinkVehicle:
                 ) from exc
         self._wait_for_armed_state(armed, self.config.arm_ack_timeout_s)
 
-    def set_gripper(self, action: GripperAction) -> None:
-        """在独立授权通过后控制明确的绝对 SERVO 输出号。"""
+    @property
+    def gripper_active(self) -> bool:
+        """机械爪开闭序列尚未发送完成时返回 ``True``。"""
+
+        with self._lock:
+            return self._gripper_action != GripperAction.NONE
+
+    def set_gripper(
+        self, action: GripperAction, *, now: float | None = None
+    ) -> tuple[int, float]:
+        """开始一段非阻塞机械爪序列，返回节拍数和预计发送时长。
+
+        旧工程在循环中 ``sleep`` 会让 ROS 网关停止处理遥测、看门狗和急停。
+        新实现只立即发送第一节拍，其余节拍由 20 Hz 网关定时器调用
+        :meth:`update_gripper` 继续发送。同一节拍可以包含 RST 的左右两路输出。
+        """
 
         if action == GripperAction.NONE:
-            return
+            return (0, 0.0)
         self._require_live_actuation()
         if not self.config.allow_gripper_actuation:
             raise VehicleError("机械爪真实输出未单独授权")
+        if not self.config.gripper.calibrated:
+            raise VehicleError("机械爪动作曲线尚未完成实机标定")
+        if (
+            self.config.gripper.uses_extended_pwm
+            and not self.config.gripper.allow_extended_pwm
+        ):
+            raise VehicleError("机械爪档案包含扩展 PWM，但尚未单独授权")
         self._require_preflight()
         self._require_fresh_heartbeat()
         self._require_vehicle_armed()
-        pwm = (
-            self.config.gripper_open_pwm
-            if action == GripperAction.OPEN
-            else self.config.gripper_close_pwm
-        )
+        self._require_allowed_mode()
+        steps = self.config.gripper.steps_for(action.value)
+        current = time.monotonic() if now is None else now
         with self._lock:
-            try:
-                self._master.mav.command_long_send(
-                    self._master.target_system,
-                    self._master.target_component,
-                    MAV_CMD_DO_SET_SERVO,
-                    0,
-                    self.config.gripper_output_channel,
-                    pwm,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
+            if self._gripper_action != GripperAction.NONE:
+                raise VehicleError(
+                    f"机械爪正在执行 {self._gripper_action.value}，拒绝重叠动作"
                 )
+            try:
+                self._send_gripper_step(steps[0])
             except Exception as exc:
                 raise VehicleError(f"机械爪命令发送失败: {exc}") from exc
+            self._gripper_action = action
+            self._gripper_pending_steps = list(steps[1:])
+            self._gripper_next_step_at = (
+                current + self.config.gripper.step_interval_s
+                if self._gripper_pending_steps
+                else None
+            )
+            if not self._gripper_pending_steps:
+                self._gripper_action = GripperAction.NONE
+        duration_s = max(0, len(steps) - 1) * self.config.gripper.step_interval_s
+        return (len(steps), duration_s)
+
+    def run_disarmed_gripper_test(
+        self,
+        action: GripperAction,
+        *,
+        confirmation: str,
+        extended_pwm_confirmation: str = "",
+        ack_timeout_s: float = 2.0,
+        sleep_fn: Callable[[float], None] = time.sleep,
+    ) -> tuple[dict[str, object], ...]:
+        """在推进器物理断开的台架上，以上锁状态试验候选爪档案。
+
+        这是一条与正常任务机械爪完全分开的调试通道：
+
+        - 要求飞控明确上锁，且三个真实输出配置门全部关闭；
+        - 要求只读预检证明输出未被 Motor1–Motor8 占用，AUX 已是 PWM；
+        - 每一个 ``MAV_CMD_DO_SET_SERVO`` 都必须收到匹配 ACK；
+        - 不会解锁、不写参数、不会把候选档案自动标记为已标定。
+
+        它只供 ``rov_gripper_test`` 命令使用，不得从自主任务调用。
+        """
+
+        if action not in {GripperAction.OPEN, GripperAction.CLOSE}:
+            raise VehicleError("机械爪候选测试只允许 open/close")
+        if confirmation != GRIPPER_TEST_CONFIRMATION:
+            raise VehicleError("机械爪台架测试确认词错误")
+        if (
+            self.config.allow_live_actuation
+            or self.config.allow_ros_arming
+            or self.config.allow_gripper_actuation
+        ):
+            raise VehicleError("候选爪测试必须使用三道真实输出门全关闭的配置副本")
+        if self.config.gripper.uses_extended_pwm and (
+            extended_pwm_confirmation != EXTENDED_PWM_CONFIRMATION
+        ):
+            raise VehicleError("该档案含扩展 PWM，第二确认词错误")
+        if not self.connected:
+            raise VehicleError("尚未连接飞控")
+        self._require_preflight()
+        self._require_fresh_heartbeat()
+        if self._telemetry.armed is not False:
+            raise VehicleError("飞控必须明确上锁，拒绝机械爪候选测试")
+
+        checks = {check.name: check for check in self._preflight_report.checks}
+        required_checks = ["机械爪输出可由 MAVLink 控制"]
+        if any(9 <= output <= 14 for output in self.config.gripper.output_channels):
+            required_checks.append("机械爪 AUX 输出已启用 PWM")
+        for name in required_checks:
+            check = checks.get(name)
+            if check is None or not check.passed:
+                observed = "报告中缺失" if check is None else check.observed
+                raise VehicleError(f"候选爪预检未通过: {name} ({observed})")
+
+        if not math.isfinite(ack_timeout_s) or ack_timeout_s <= 0.0:
+            raise VehicleError("ACK 超时必须是正有限数")
+
+        records: list[dict[str, object]] = []
+        steps = self.config.gripper.steps_for(action.value)
+        for step_index, step in enumerate(steps, start=1):
+            # 每个节拍前重新吸收遥测，一旦飞控意外解锁就停止。
+            self.poll_telemetry()
+            self._require_fresh_heartbeat()
+            if self._telemetry.armed is not False:
+                raise VehicleError("测试期间飞控不再是上锁状态，立即停止")
+            for output_channel, pwm in step:
+                with self._lock:
+                    try:
+                        self._send_gripper_pwm(output_channel, pwm)
+                    except Exception as exc:
+                        raise VehicleError(f"候选爪命令发送失败: {exc}") from exc
+                ack_result = self._wait_for_command_ack(
+                    MAV_CMD_DO_SET_SERVO,
+                    ack_timeout_s,
+                )
+                records.append(
+                    {
+                        "step": step_index,
+                        "output_channel": output_channel,
+                        "pwm": pwm,
+                        "ack_result": ack_result,
+                    }
+                )
+            if step_index < len(steps):
+                sleep_fn(self.config.gripper.step_interval_s)
+        return tuple(records)
+
+    def update_gripper(self, *, now: float | None = None) -> bool:
+        """到达下一节拍时发送该帧全部输出；否则返回 ``False``。"""
+
+        current = time.monotonic() if now is None else now
+        with self._lock:
+            if self._gripper_action == GripperAction.NONE:
+                return False
+            if self._gripper_next_step_at is None or current < self._gripper_next_step_at:
+                return False
+
+        # 每一步都重新检查飞控状态。序列期间一旦断链、上锁或权限失效，
+        # 不再发送剩余值，让上层网关进入锁定急停。
+        self._require_live_actuation()
+        self._require_preflight()
+        self._require_fresh_heartbeat()
+        self._require_vehicle_armed()
+        self._require_allowed_mode()
+        with self._lock:
+            if not self._gripper_pending_steps:
+                self._finish_gripper_sequence()
+                return False
+            step = self._gripper_pending_steps.pop(0)
+            try:
+                self._send_gripper_step(step)
+            except Exception as exc:
+                self._finish_gripper_sequence()
+                raise VehicleError(f"机械爪序列发送失败: {exc}") from exc
+            if self._gripper_pending_steps:
+                # 调度变慢时不补发一串积压命令，始终从真实发送时刻重新计时。
+                self._gripper_next_step_at = (
+                    current + self.config.gripper.step_interval_s
+                )
+            else:
+                self._finish_gripper_sequence()
+            return True
+
+    def cancel_gripper(self) -> None:
+        """取消尚未发送的步骤；不臆测舵机的中位或反向动作。"""
+
+        with self._lock:
+            self._finish_gripper_sequence()
+
+    def _finish_gripper_sequence(self) -> None:
+        """清空机械爪调度状态；调用方已经持有可重入锁。"""
+
+        self._gripper_action = GripperAction.NONE
+        self._gripper_pending_steps.clear()
+        self._gripper_next_step_at = None
+
+    def _send_gripper_step(self, step: tuple[tuple[int, int], ...]) -> None:
+        """依次发送同一节拍内的一路或多路绝对 SERVO 输出。"""
+
+        for output_channel, pwm in step:
+            self._send_gripper_pwm(output_channel, pwm)
+
+    def _send_gripper_pwm(self, output_channel: int, pwm: int) -> None:
+        """向给定绝对 SERVO 输出发送一个 MAVLink PWM 值。"""
+
+        self._master.mav.command_long_send(
+            self._master.target_system,
+            self._master.target_component,
+            MAV_CMD_DO_SET_SERVO,
+            0,
+            output_channel,
+            pwm,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
 
     def poll_telemetry(self, maximum_messages: int = 100) -> TelemetrySnapshot:
         """非阻塞读取有限条 MAVLink 消息并返回真实遥测快照。"""
@@ -557,6 +746,31 @@ class MavlinkVehicle:
             else ""
         )
         raise VehicleError(f"等待飞控{'解锁' if desired else '上锁'}确认超时{suffix}")
+
+    def _wait_for_command_ack(self, command: int, timeout_s: float) -> int:
+        """等待一个特定 MAVLink 命令的最终 ACK。"""
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            message = self._master.recv_match(
+                blocking=True,
+                timeout=min(0.2, remaining),
+            )
+            if message is None or not self._message_is_from_target(message):
+                continue
+            self._update_telemetry(message, time.monotonic())
+            if message.get_type() != "COMMAND_ACK":
+                continue
+            if int(getattr(message, "command", -1)) != int(command):
+                continue
+            result = int(getattr(message, "result", -1))
+            if result == MAV_RESULT_IN_PROGRESS:
+                continue
+            if result != MAV_RESULT_ACCEPTED:
+                raise VehicleError(f"飞控拒绝 MAVLink 命令 {command}，ACK={result}")
+            return result
+        raise VehicleError(f"等待 MAVLink 命令 {command} ACK 超时")
 
     def _request_autopilot_version(self) -> str | None:
         """请求 AUTOPILOT_VERSION；旧固件不响应时返回 ``None``。"""

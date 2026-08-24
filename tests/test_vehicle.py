@@ -7,11 +7,21 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from rov_competition.config import ControlProtocol, RcOverrideConfig, load_robot_config
+from rov_competition.config import (
+    ControlProtocol,
+    GripperConfig,
+    GripperOutputConfig,
+    GripperSweepConfig,
+    RcOverrideConfig,
+    load_robot_config,
+)
 from rov_competition.domain import GripperAction, MotionCommand
-from rov_competition.preflight import PreflightReport
+from rov_competition.preflight import PreflightCheck, PreflightReport
 from rov_competition.vehicle import (
+    EXTENDED_PWM_CONFIRMATION,
+    GRIPPER_TEST_CONFIRMATION,
     MAV_CMD_COMPONENT_ARM_DISARM,
+    MAV_CMD_DO_SET_SERVO,
     MAV_MODE_FLAG_SAFETY_ARMED,
     MavlinkVehicle,
     VehicleError,
@@ -63,7 +73,8 @@ def heartbeat(*, armed: bool) -> FakeMessage:
 class FakeMav:
     """记录所有可能影响实艇的 MAVLink 调用。"""
 
-    def __init__(self) -> None:
+    def __init__(self, owner: "FakeMaster") -> None:
+        self.owner = owner
         self.manual_controls: list[tuple[int, ...]] = []
         self.overrides: list[tuple[int, ...]] = []
         self.commands: list[tuple[float, ...]] = []
@@ -77,6 +88,14 @@ class FakeMav:
 
     def command_long_send(self, *values: float) -> None:
         self.commands.append(values)
+        if self.owner.acknowledge_servo and int(values[2]) == MAV_CMD_DO_SET_SERVO:
+            self.owner.messages.append(
+                FakeMessage(
+                    "COMMAND_ACK",
+                    command=MAV_CMD_DO_SET_SERVO,
+                    result=0,
+                )
+            )
 
     def heartbeat_send(self, *values: int) -> None:
         self.heartbeats.append(values)
@@ -88,8 +107,9 @@ class FakeMaster:
     def __init__(self) -> None:
         self.target_system = 1
         self.target_component = 1
-        self.mav = FakeMav()
         self.messages: list[FakeMessage] = []
+        self.acknowledge_servo = False
+        self.mav = FakeMav(self)
         self.wait_heartbeats: list[FakeMessage] | None = None
         self.closed = False
 
@@ -108,7 +128,7 @@ class FakeMaster:
         self.closed = True
 
 
-def passed_report() -> PreflightReport:
+def passed_report(*, include_gripper_checks: bool = False) -> PreflightReport:
     """创建不含关键失败的假预检报告。"""
 
     parameters = {}
@@ -116,12 +136,30 @@ def passed_report() -> PreflightReport:
         parameters[f"RC{channel}_MIN"] = 1100
         parameters[f"RC{channel}_TRIM"] = 1500
         parameters[f"RC{channel}_MAX"] = 1900
+    checks = ()
+    if include_gripper_checks:
+        checks = (
+            PreflightCheck(
+                name="机械爪输出可由 MAVLink 控制",
+                level="warning",
+                passed=True,
+                observed="free",
+                expected="free",
+            ),
+            PreflightCheck(
+                name="机械爪 AUX 输出已启用 PWM",
+                level="warning",
+                passed=True,
+                observed="BRD_PWM_COUNT=4",
+                expected=">=4",
+            ),
+        )
     return PreflightReport(
         generated_at_utc="2026-08-15T00:00:00+00:00",
         target_system=1,
         target_component=1,
         firmware_version="test",
-        checks=(),
+        checks=checks,
         parameters=parameters,
     )
 
@@ -414,8 +452,8 @@ def test_emergency_sequence_neutralises_normally_disarms_and_releases() -> None:
     assert master.mav.manual_controls[-1] == (1, 0, 0, 500, 0, 0)
 
 
-def test_gripper_uses_independent_gate_and_absolute_output_number() -> None:
-    """机械爪默认被独立拒绝；授权后使用 YAML 绝对输出号，不做“+8”。"""
+def test_gripper_uses_independent_gate_and_nonblocking_dalian_sweep() -> None:
+    """授权后按旧大连曲线渐变，且 YAML 使用绝对输出号、不再做“+8”。"""
 
     vehicle, master = make_vehicle(live=True)
     vehicle._telemetry.armed = True
@@ -423,8 +461,188 @@ def test_gripper_uses_independent_gate_and_absolute_output_number() -> None:
         vehicle.set_gripper(GripperAction.OPEN)
     assert master.mav.commands == []
 
-    vehicle.config = replace(vehicle.config, allow_gripper_actuation=True)
-    vehicle.set_gripper(GripperAction.OPEN)
-    command = master.mav.commands[-1]
-    assert command[4] == vehicle.config.gripper_output_channel
-    assert command[5] == vehicle.config.gripper_open_pwm
+    vehicle.config = replace(
+        vehicle.config,
+        allow_gripper_actuation=True,
+        gripper=replace(vehicle.config.gripper, calibrated=True),
+    )
+    output = vehicle.config.gripper.outputs[0]
+    values = output.open_sweep.values()
+    step_count, duration_s = vehicle.set_gripper(GripperAction.OPEN, now=10.0)
+    assert step_count == len(values)
+    assert duration_s == pytest.approx((len(values) - 1) * 0.125)
+    assert len(master.mav.commands) == 1
+    assert master.mav.commands[-1][4] == output.output_channel
+    assert master.mav.commands[-1][5] == values[0]
+
+    assert not vehicle.update_gripper(now=10.124)
+    for index, expected_pwm in enumerate(values[1:], 1):
+        assert vehicle.update_gripper(now=10.0 + index * 0.125)
+        assert master.mav.commands[-1][4] == 12
+        assert master.mav.commands[-1][5] == expected_pwm
+    assert not vehicle.gripper_active
+
+
+def test_rst_gripper_sends_two_exact_outputs_in_one_step() -> None:
+    """RST 档案一次服务请求必须同时发送左右执行器的历史值。"""
+
+    vehicle, master = make_vehicle(live=True)
+    vehicle._telemetry.armed = True
+    rst = GripperConfig(
+        profile="rst",
+        calibrated=True,
+        allow_extended_pwm=True,
+        step_interval_s=0.125,
+        outputs=(
+            GripperOutputConfig(
+                output_channel=11,
+                open_sweep=GripperSweepConfig(950, 950, 25),
+                close_sweep=GripperSweepConfig(1450, 1450, 25),
+            ),
+            GripperOutputConfig(
+                output_channel=10,
+                open_sweep=GripperSweepConfig(1050, 1050, 25),
+                close_sweep=GripperSweepConfig(500, 500, -25),
+            ),
+        ),
+    )
+    vehicle.config = replace(
+        vehicle.config,
+        allow_gripper_actuation=True,
+        gripper=rst,
+    )
+
+    step_count, duration_s = vehicle.set_gripper(GripperAction.OPEN, now=30.0)
+    assert step_count == 1
+    assert duration_s == 0.0
+    assert [(call[4], call[5]) for call in master.mav.commands[-2:]] == [
+        (11, 950),
+        (10, 1050),
+    ]
+    assert not vehicle.gripper_active
+
+    vehicle.set_gripper(GripperAction.CLOSE, now=31.0)
+    assert [(call[4], call[5]) for call in master.mav.commands[-2:]] == [
+        (11, 1450),
+        (10, 500),
+    ]
+
+
+def test_gripper_rejects_overlapping_sequence_and_cancel_stops_future_steps() -> None:
+    """同一输出不能叠加开闭动作，取消后也不得继续发送旧序列。"""
+
+    vehicle, master = make_vehicle(live=True)
+    vehicle._telemetry.armed = True
+    vehicle.config = replace(
+        vehicle.config,
+        allow_gripper_actuation=True,
+        gripper=replace(vehicle.config.gripper, calibrated=True),
+    )
+    vehicle.set_gripper(GripperAction.CLOSE, now=20.0)
+    with pytest.raises(VehicleError, match="拒绝重叠动作"):
+        vehicle.set_gripper(GripperAction.OPEN, now=20.0)
+    sent_before_cancel = len(master.mav.commands)
+    vehicle.cancel_gripper()
+    assert not vehicle.gripper_active
+    assert not vehicle.update_gripper(now=99.0)
+    assert len(master.mav.commands) == sent_before_cancel
+
+
+def test_disarmed_dalian_candidate_test_waits_for_every_ack() -> None:
+    """候选档案只能在上锁、预检通过时逐步发送，并保存每个 ACK。"""
+
+    vehicle, master = make_vehicle(live=False)
+    vehicle._preflight_report = passed_report(include_gripper_checks=True)
+    master.acknowledge_servo = True
+    slept: list[float] = []
+
+    records = vehicle.run_disarmed_gripper_test(
+        GripperAction.OPEN,
+        confirmation=GRIPPER_TEST_CONFIRMATION,
+        sleep_fn=slept.append,
+    )
+
+    expected_values = vehicle.config.gripper.outputs[0].open_sweep.values()
+    assert [item["pwm"] for item in records] == list(expected_values)
+    assert all(item["ack_result"] == 0 for item in records)
+    assert [int(call[2]) for call in master.mav.commands] == [
+        MAV_CMD_DO_SET_SERVO
+    ] * len(expected_values)
+    assert MAV_CMD_COMPONENT_ARM_DISARM not in {
+        int(call[2]) for call in master.mav.commands
+    }
+    assert slept == [vehicle.config.gripper.step_interval_s] * (
+        len(expected_values) - 1
+    )
+
+
+def test_disarmed_gripper_candidate_rejects_armed_or_missing_preflight() -> None:
+    """软件配置门关闭并不够；飞控上锁和输出检查缺一不可。"""
+
+    vehicle, master = make_vehicle(live=False)
+    vehicle._preflight_report = passed_report(include_gripper_checks=True)
+    vehicle._telemetry.armed = True
+    with pytest.raises(VehicleError, match="必须明确上锁"):
+        vehicle.run_disarmed_gripper_test(
+            GripperAction.OPEN,
+            confirmation=GRIPPER_TEST_CONFIRMATION,
+            sleep_fn=lambda _seconds: None,
+        )
+    assert master.mav.commands == []
+
+    missing, missing_master = make_vehicle(live=False)
+    with pytest.raises(VehicleError, match="报告中缺失"):
+        missing.run_disarmed_gripper_test(
+            GripperAction.OPEN,
+            confirmation=GRIPPER_TEST_CONFIRMATION,
+            sleep_fn=lambda _seconds: None,
+        )
+    assert missing_master.mav.commands == []
+
+
+def test_rst_candidate_requires_second_extended_pwm_confirmation() -> None:
+    """RST 任一动作使用前都必须明示知晓整份档案包含 500us。"""
+
+    vehicle, master = make_vehicle(live=False)
+    vehicle.config = replace(
+        vehicle.config,
+        gripper=GripperConfig(
+            profile="rst",
+            calibrated=False,
+            allow_extended_pwm=False,
+            step_interval_s=0.125,
+            outputs=(
+                GripperOutputConfig(
+                    output_channel=11,
+                    open_sweep=GripperSweepConfig(950, 950, 25),
+                    close_sweep=GripperSweepConfig(1450, 1450, 25),
+                ),
+                GripperOutputConfig(
+                    output_channel=10,
+                    open_sweep=GripperSweepConfig(1050, 1050, 25),
+                    close_sweep=GripperSweepConfig(500, 500, -25),
+                ),
+            ),
+        ),
+    )
+    vehicle._preflight_report = passed_report(include_gripper_checks=True)
+    master.acknowledge_servo = True
+
+    with pytest.raises(VehicleError, match="第二确认词"):
+        vehicle.run_disarmed_gripper_test(
+            GripperAction.OPEN,
+            confirmation=GRIPPER_TEST_CONFIRMATION,
+            sleep_fn=lambda _seconds: None,
+        )
+    assert master.mav.commands == []
+
+    records = vehicle.run_disarmed_gripper_test(
+        GripperAction.OPEN,
+        confirmation=GRIPPER_TEST_CONFIRMATION,
+        extended_pwm_confirmation=EXTENDED_PWM_CONFIRMATION,
+        sleep_fn=lambda _seconds: None,
+    )
+    assert [(item["output_channel"], item["pwm"]) for item in records] == [
+        (11, 950),
+        (10, 1050),
+    ]

@@ -251,6 +251,92 @@ def build_preflight_report(
         "Motor1–Motor8 各出现一次",
     )
 
+    motor_output_numbers = {
+        output for outputs in motor_outputs.values() for output in outputs
+    }
+    # 实艇 ArduSub 4.1.2 的 ServoRelayEvents 允许功能 0、1、22、23、28
+    # 或 51..66 响应 MAV_CMD_DO_SET_SERVO。机械爪开启权限时
+    # 该项升级为关键检查。
+    gripper_outputs_available = True
+    gripper_output_details: list[str] = []
+    for gripper_output in config.gripper.outputs:
+        output_number = gripper_output.output_channel
+        function = _integer(
+            _parameter(parameters, f"SERVO{output_number}_FUNCTION")
+        )
+        function_allowed = function in {0, 1, 22, 23, 28} or (
+            function is not None and 51 <= function <= 66
+        )
+        output_available = (
+            output_number not in motor_output_numbers and function_allowed
+        )
+        gripper_outputs_available = gripper_outputs_available and output_available
+        minimum = _integer(_parameter(parameters, f"SERVO{output_number}_MIN"))
+        trim = _integer(_parameter(parameters, f"SERVO{output_number}_TRIM"))
+        maximum = _integer(_parameter(parameters, f"SERVO{output_number}_MAX"))
+        gripper_output_details.append(
+            f"S{output_number}:FUNCTION={function},"
+            f"MIN/TRIM/MAX={minimum}/{trim}/{maximum}"
+        )
+    gripper_curve_values = config.gripper.all_pwm_values()
+    gripper_curve_range = f"{min(gripper_curve_values)}..{max(gripper_curve_values)}"
+    add(
+        "机械爪输出可由 MAVLink 控制",
+        "critical" if config.allow_gripper_actuation else "warning",
+        gripper_outputs_available,
+        f"{config.gripper.profile}: " + "; ".join(gripper_output_details),
+        "不占用 Motor1–Motor8，FUNCTION 为 0、1、22、23、28 或 51..66",
+        (
+            "MIN/TRIM/MAX 只作记录；开闭曲线 "
+            f"{gripper_curve_range} "
+            "仍必须断开推进器后按实物标定。"
+        ),
+    )
+
+    # Pixhawk1 的输出 9..14 对应 AUX1..AUX6。ArduSub 4.1.2 使用
+    # BRD_PWM_COUNT 决定从 AUX1 开始有多少个 AUX 引脚工作在 PWM 模式；
+    # 因此旧代码候选的输出 12（AUX4）至少需要 BRD_PWM_COUNT=4。
+    # 新硬件/新固件可能没有该参数，所以只在参数存在且输出落在 Pixhawk AUX
+    # 范围内时作判断；机械爪获授权后，该检查会阻止错误配置产生真实输出。
+    auxiliary_output_indices = tuple(
+        output - 8
+        for output in config.gripper.output_channels
+        if 9 <= output <= 14
+    )
+    board_pwm_count = _integer(_parameter(parameters, "BRD_PWM_COUNT"))
+    if auxiliary_output_indices:
+        required_pwm_count = max(auxiliary_output_indices)
+        mapping = ", ".join(
+            f"S{output}=AUX{output - 8}"
+            for output in config.gripper.output_channels
+            if 9 <= output <= 14
+        )
+        add(
+            "机械爪 AUX 输出已启用 PWM",
+            "critical" if config.allow_gripper_actuation else "warning",
+            board_pwm_count is not None
+            and board_pwm_count >= required_pwm_count,
+            f"BRD_PWM_COUNT={board_pwm_count}",
+            f">={required_pwm_count}（{mapping}）",
+            (
+                "此检查适用于带 BRD_PWM_COUNT 的 Pixhawk/ArduSub；"
+                "参数缺失时不会猜测该 AUX 引脚已经输出 PWM。"
+            ),
+        )
+
+    if config.gripper.uses_extended_pwm:
+        add(
+            "机械爪扩展 PWM 已明示授权",
+            "critical" if config.allow_gripper_actuation else "warning",
+            config.gripper.allow_extended_pwm,
+            f"allow_extended_pwm={config.gripper.allow_extended_pwm}",
+            "历史 PWM 超出 800..2200 时必须由现场显式授权",
+            (
+                f"档案 {config.gripper.profile} 的范围为 {gripper_curve_range}us；"
+                "该开关不证明电气或机械安全，仍须断开推进器后逐项实测。"
+            ),
+        )
+
     ranges_ok = complete_mapping
     range_details: list[str] = []
     for motor, outputs in motor_outputs.items():

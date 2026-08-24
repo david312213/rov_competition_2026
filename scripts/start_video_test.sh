@@ -1,72 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 一键视频测试入口：
-#   1. ROS 启动 5600 -> 5701/5702 原始 RTP 分流；
-#   2. ROS 启动 YOLO 感知，但故意不启动飞控网关；
-#   3. 尽量自动打开 QGroundControl 和 rqt_image_view。
-# 本脚本永远不解锁、不启动任务，也没有向推进器发送命令的通道。
+# 纯视频/识别一键入口。QGC 直接接收 BlueOS -> 5600；本脚本只处理
+# BlueOS -> 5700 -> YOLO 5702。它不启动飞控网关，也没有任何控制接口。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ROS_SETUP="/opt/ros/humble/setup.bash"
 VENV_SETUP="${PROJECT_DIR}/.venv/bin/activate"
 WORKSPACE_SETUP="${PROJECT_DIR}/ros2_ws/install/setup.bash"
+ROBOT_CONFIG="${PROJECT_DIR}/config/robot.yaml"
+AUTONOMY_TEMPLATE="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/autonomy.yaml"
+AUTONOMY_LOCAL="${PROJECT_DIR}/config/autonomy.local.yaml"
+AUTONOMY_CONFIG="${AUTONOMY_CONFIG:-${AUTONOMY_TEMPLATE}}"
+TARGETS_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/targets.yaml"
 
 START_QGC=true
 START_VIEWER=true
+ROV_IP="${ROV_IP:-192.168.2.2}"
+TOPSIDE_IP="${TOPSIDE_IP:-192.168.2.1}"
+LAUNCH_PID=""
+VIEWER_PID=""
 
 usage() {
   cat <<'EOF'
-用法：
-  ./scripts/start_video_test.sh [--no-qgc] [--no-viewer]
+用法：./scripts/start_video_test.sh [--no-qgc] [--no-viewer]
 
-默认行为：启动视频分流、YOLO，并尝试打开 QGC 和带框查看器。
---no-qgc     不自动打开 QGroundControl
---no-viewer  不自动打开 rqt_image_view
+默认启动 5700 -> 5702 视频分流和 GPU YOLO，并尝试打开 QGC 与带框查看器。
+本脚本只做识别显示，不连接飞控、不解锁、不发送运动或机械爪命令。
 
-如 QGC 不在 PATH，可这样指定：
+如 QGC 不在 PATH：
   QGC_EXECUTABLE=/完整路径/QGroundControl.AppImage ./scripts/start_video_test.sh
 EOF
 }
 
 while (($# > 0)); do
   case "$1" in
-    --no-qgc)
-      START_QGC=false
-      ;;
-    --no-viewer)
-      START_VIEWER=false
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "未知参数：$1" >&2
-      usage >&2
-      exit 2
-      ;;
+    --no-qgc) START_QGC=false ;;
+    --no-viewer) START_VIEWER=false ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
 
-for required_file in \
-  "${ROS_SETUP}" \
-  "${VENV_SETUP}" \
-  "${WORKSPACE_SETUP}" \
-  "${PROJECT_DIR}/config/robot.yaml" \
-  "${PROJECT_DIR}/ros2_ws/src/rov_competition/config/autonomy.yaml" \
-  "${PROJECT_DIR}/ros2_ws/src/rov_competition/config/targets.yaml" \
-  "${PROJECT_DIR}/ros2_ws/src/rov_competition/models/seafood_yolo26x.pt"; do
-  if [[ ! -r "${required_file}" ]]; then
-    echo "缺少必要文件：${required_file}" >&2
-    echo "请先完成安装、构建、实艇配置和权重复制。" >&2
-    exit 1
-  fi
+for required in \
+  "${ROS_SETUP}" "${VENV_SETUP}" "${WORKSPACE_SETUP}" "${ROBOT_CONFIG}" \
+  "${AUTONOMY_TEMPLATE}" "${TARGETS_CONFIG}"; do
+  [[ -r "${required}" ]] || { echo "缺少必要文件：${required}" >&2; exit 1; }
 done
 
-# ROS 2 Humble 的环境脚本不保证兼容 nounset，因此只在 source 时临时关闭。
 set +u
 source "${ROS_SETUP}"
 source "${VENV_SETUP}"
@@ -74,149 +57,138 @@ source "${WORKSPACE_SETUP}"
 set -u
 export PYTHONNOUSERSITE=1
 cd "${PROJECT_DIR}"
+if [[ -z "${AUTONOMY_CONFIG:-}" || "${AUTONOMY_CONFIG}" == "${AUTONOMY_TEMPLATE}" ]]; then
+  if [[ -r "${AUTONOMY_LOCAL}" ]]; then
+    AUTONOMY_CONFIG="${AUTONOMY_LOCAL}"
+  else
+    AUTONOMY_CONFIG="${AUTONOMY_TEMPLATE}"
+  fi
+fi
+[[ -r "${AUTONOMY_CONFIG}" ]] || { echo "缺少活动自主配置：${AUTONOMY_CONFIG}" >&2; exit 1; }
 
-# 在启动多个进程前先做快速 ABI/GPU 检查，避免启动后才喷出一长串
-# ``_ARRAY_API not found`` 或静默退回 CPU 的报错。
-if ! python - <<'PY'
+for command in python ros2 ss ping ip; do
+  command -v "${command}" >/dev/null 2>&1 || { echo "缺少命令 ${command}" >&2; exit 1; }
+done
+
+python - <<'PY'
 import cv2
 import numpy
 import torch
 
 if int(numpy.__version__.split(".", 1)[0]) >= 2:
-    raise RuntimeError(f"本工程要求 NumPy 1.x，当前为 {numpy.__version__}")
+    raise RuntimeError(f"现场环境要求 NumPy 1.x，当前 {numpy.__version__}")
 if not torch.cuda.is_available():
-    raise RuntimeError("CUDA 不可用；禁止用 CPU 模式开始现场视频测试")
-
+    raise RuntimeError("视频测试必须使用 CUDA GPU，不允许静默退回 CPU")
 print(f"视觉环境正常：NumPy {numpy.__version__}, OpenCV {cv2.__version__}")
 print(f"GPU：{torch.cuda.get_device_name(0)}")
 PY
-then
-  echo "视觉环境不兼容，请先执行：" >&2
-  echo 'python -m pip install --upgrade --force-reinstall "numpy==1.26.4" "opencv-python==4.11.0.86"' >&2
-  exit 1
-fi
 
-port_owner() {
-  local port="$1"
-  ss -H -lunp 2>/dev/null | grep -E ":${port}([[:space:]]|$)" || true
-}
+ros2 run rov_competition rov_field_setup \
+  --project-dir "${PROJECT_DIR}" weights verify
 
+port_owner() { ss -H -lunp 2>/dev/null | grep -E ":$1([[:space:]]|$)" || true; }
 ensure_free_port() {
-  local port="$1"
   local owner
-  owner="$(port_owner "${port}")"
-  if [[ -n "${owner}" ]]; then
-    echo "UDP ${port} 已被占用，先关闭旧视频进程：" >&2
-    echo "${owner}" >&2
-    exit 1
-  fi
+  owner="$(port_owner "$1")"
+  [[ -z "${owner}" ]] || { echo "UDP $1 已被占用：" >&2; echo "${owner}" >&2; exit 1; }
 }
 
-ensure_free_port 5600
+ensure_free_port 5700
 ensure_free_port 5702
-
-QGC_PORT_OWNER="$(port_owner 5701)"
-if [[ -n "${QGC_PORT_OWNER}" ]] \
-  && ! grep -Eiq 'qgroundcontrol' <<<"${QGC_PORT_OWNER}"; then
-  echo "UDP 5701 已被非 QGC 程序占用：" >&2
-  echo "${QGC_PORT_OWNER}" >&2
+if ! ip -br -4 addr | grep -Eq "(^|[[:space:]])${TOPSIDE_IP}/24([[:space:]]|$)"; then
+  echo "有线网卡未设为 ${TOPSIDE_IP}/24。" >&2
   exit 1
 fi
+ping -c 3 -W 2 "${ROV_IP}" >/dev/null || { echo "无法连通 ${ROV_IP}" >&2; exit 1; }
 
-if ros2 node list 2>/dev/null \
-  | grep -Eq '^/(rov_autonomy|rov_stream_bridge|rov_vehicle_gateway)$'; then
-  echo "检测到旧的视频节点或飞控网关，请先在原终端按 Ctrl+C：" >&2
-  ros2 node list 2>/dev/null \
-    | grep -E '^/(rov_autonomy|rov_stream_bridge|rov_vehicle_gateway)$' >&2
+QGC_OWNER="$(port_owner 5600)"
+if [[ -n "${QGC_OWNER}" ]] && ! grep -Eiq 'qgroundcontrol' <<<"${QGC_OWNER}"; then
+  echo "UDP 5600 已被非 QGC 程序占用：" >&2
+  echo "${QGC_OWNER}" >&2
   exit 1
 fi
-
-LAUNCH_PID=""
-VIEWER_PID=""
+if ros2 node list 2>/dev/null | grep -Eq '^/(rov_autonomy|rov_stream_bridge|rov_search_perception)$'; then
+  echo "检测到旧的视频/识别节点，请先回原终端 Ctrl+C。" >&2
+  exit 1
+fi
 
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
-
-  if [[ -n "${VIEWER_PID}" ]] && kill -0 "${VIEWER_PID}" 2>/dev/null; then
-    kill -INT "${VIEWER_PID}" 2>/dev/null || true
-  fi
-  if [[ -n "${LAUNCH_PID}" ]] && kill -0 "${LAUNCH_PID}" 2>/dev/null; then
-    kill -INT "${LAUNCH_PID}" 2>/dev/null || true
-  fi
-
+  for pid in "${VIEWER_PID}" "${LAUNCH_PID}"; do
+    [[ -n "${pid}" ]] || continue
+    kill -0 "${pid}" 2>/dev/null || continue
+    kill -INT "${pid}" 2>/dev/null || true
+  done
   [[ -z "${VIEWER_PID}" ]] || wait "${VIEWER_PID}" 2>/dev/null || true
   [[ -z "${LAUNCH_PID}" ]] || wait "${LAUNCH_PID}" 2>/dev/null || true
   echo
-  echo "视频分流和 YOLO 已停止；QGC 如仍打开可继续用于人工观察。"
+  echo "视频分流和 YOLO 已停止；QGC 继续由操作员管理。"
   exit "${status}"
 }
-
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-echo "============================================================"
-echo "ROV 一键视频测试（绝不会连接飞控网关或驱动推进器）"
-echo "  输入：树莓派 RTP/H.264 -> UDP 5600"
-echo "  QGC：UDP 5701"
-echo "  YOLO：UDP 5702"
-echo "  停止：回到本终端按 Ctrl+C"
-echo "============================================================"
-
-ros2 launch rov_competition video_test.launch.py \
-  robot_config:="${PROJECT_DIR}/config/robot.yaml" \
-  autonomy_config:="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/autonomy.yaml" \
-  targets_config:="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/targets.yaml" \
-  source_port:=5600 \
-  qgc_port:=5701 \
-  ai_port:=5702 &
-LAUNCH_PID=$!
-
-sleep 2
-if ! kill -0 "${LAUNCH_PID}" 2>/dev/null; then
-  echo "ROS 视频启动失败，请查看上方完整报错。" >&2
-  wait "${LAUNCH_PID}" 2>/dev/null || true
-  exit 1
-fi
-
-if "${START_QGC}"; then
-  if pgrep -f '[Qq][Gg]round[Cc]ontrol' >/dev/null 2>&1; then
-    echo "QGroundControl 已经运行，继续使用现有窗口。"
+if "${START_QGC}" && ! pgrep -f '[Qq][Gg]round[Cc]ontrol' >/dev/null 2>&1; then
+  QGC_COMMAND="${QGC_EXECUTABLE:-}"
+  [[ -n "${QGC_COMMAND}" ]] || QGC_COMMAND="$(command -v QGroundControl 2>/dev/null || true)"
+  [[ -n "${QGC_COMMAND}" ]] || QGC_COMMAND="$(command -v qgroundcontrol 2>/dev/null || true)"
+  if [[ -n "${QGC_COMMAND}" && -x "${QGC_COMMAND}" ]]; then
+    "${QGC_COMMAND}" >"${XDG_RUNTIME_DIR:-/tmp}/rov_qgc_$$.log" 2>&1 &
+  elif command -v flatpak >/dev/null 2>&1 \
+    && flatpak info org.mavlink.qgroundcontrol >/dev/null 2>&1; then
+    flatpak run org.mavlink.qgroundcontrol \
+      >"${XDG_RUNTIME_DIR:-/tmp}/rov_qgc_$$.log" 2>&1 &
   else
-    QGC_COMMAND="${QGC_EXECUTABLE:-}"
-    if [[ -z "${QGC_COMMAND}" ]]; then
-      QGC_COMMAND="$(command -v QGroundControl 2>/dev/null || true)"
-    fi
-    if [[ -z "${QGC_COMMAND}" ]]; then
-      QGC_COMMAND="$(command -v qgroundcontrol 2>/dev/null || true)"
-    fi
-
-    if [[ -n "${QGC_COMMAND}" && -x "${QGC_COMMAND}" ]]; then
-      QGC_LOG="${XDG_RUNTIME_DIR:-/tmp}/rov_qgc_$$.log"
-      "${QGC_COMMAND}" >"${QGC_LOG}" 2>&1 &
-      echo "已打开 QGroundControl；启动日志：${QGC_LOG}"
-    else
-      echo "没有自动找到 QGC，请手动打开并选择 UDP H.264 端口 5701。"
-    fi
+    echo "未自动找到 QGC；请手动打开，默认视频端口为 5600。"
   fi
 fi
 
+if "${START_QGC}"; then
+  QGC_READY=false
+  for _ in {1..40}; do
+    if grep -Eiq 'qgroundcontrol' <<<"$(port_owner 5600)"; then
+      QGC_READY=true
+      break
+    fi
+    sleep 0.5
+  done
+  [[ "${QGC_READY}" == true ]] || {
+    echo "QGC 未监听默认 UDP H.264 端口 5600。" >&2
+    exit 1
+  }
+fi
+
+echo "============================================================"
+echo "ROV 一键视频识别测试（纯感知，不连接飞控）"
+echo "  QGC：BlueOS -> UDP 5600"
+echo "  YOLO：BlueOS -> UDP 5700 -> UDP 5702"
+echo "  停止：本终端 Ctrl+C"
+echo "============================================================"
+
+ros2 launch rov_competition video_test.launch.py \
+  robot_config:="${ROBOT_CONFIG}" \
+  autonomy_config:="${AUTONOMY_CONFIG}" \
+  targets_config:="${TARGETS_CONFIG}" \
+  source_port:=5700 \
+  ai_port:=5702 &
+LAUNCH_PID=$!
+sleep 2
+kill -0 "${LAUNCH_PID}" 2>/dev/null || { echo "ROS 视频启动失败。" >&2; exit 1; }
+
 if "${START_VIEWER}"; then
   if ros2 pkg prefix rqt_image_view >/dev/null 2>&1; then
-    (
-      sleep 4
-      exec ros2 run rqt_image_view rqt_image_view
-    ) &
+    (sleep 4; exec ros2 run rqt_image_view rqt_image_view) &
     VIEWER_PID=$!
-    echo "带框查看器将在几秒后打开；请选择 /rov/annotated_image，传输方式选 compressed。"
+    echo "带框查看器将打开；选择 /rov/annotated_image，传输方式选 compressed。"
   else
-    echo "未安装 rqt_image_view；仍可用 ros2 topic hz 检查识别帧率。"
+    echo "未安装 rqt_image_view；可用 ros2 topic hz /rov/detections 检查。"
   fi
 fi
 
 set +e
 wait "${LAUNCH_PID}"
-LAUNCH_STATUS=$?
+STATUS=$?
 set -e
-exit "${LAUNCH_STATUS}"
+exit "${STATUS}"

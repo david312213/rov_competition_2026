@@ -74,7 +74,7 @@ class RtpMkvRecorder:
         self,
         session_directory: str | Path,
         *,
-        source_port: int = 5702,
+        source_port: int = 5704,
         payload_type: int = 96,
         stop_timeout_s: float = 8.0,
     ) -> None:
@@ -466,7 +466,7 @@ def build_video_only_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--session-dir", required=True)
     parser.add_argument("--project-dir", default=str(Path.cwd()))
-    parser.add_argument("--record-port", type=int, default=5702)
+    parser.add_argument("--record-port", type=int, default=5704)
     parser.add_argument("--payload-type", type=int, default=96)
     return parser
 

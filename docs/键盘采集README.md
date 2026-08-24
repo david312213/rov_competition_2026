@@ -10,7 +10,7 @@ cd /home/persica/rov_competition_2026
 ./scripts/start_dataset_collection.sh
 ```
 
-它会依次启动 MAVLink 分流、QGC、ROS 飞控网关、视频分流、原始录像器
+它会依次检查 QGC、启动 ROS 飞控网关、软件视频分流、原始录像器
 和键盘控制窗口。它不加载 YOLO、不需要权重、不控制机械爪。
 
 “一键”不等于绕过安全：首次必须核对水池最大深度；每次实艇启动仍要
@@ -65,21 +65,18 @@ manual_control:
 控制状态新鲜度至少允许 `2.0 s`，键盘节点每帧会清理积压的 ROS 回调，
 避免桌面短暂停顿造成误报。旧配置中的 `0.75` 会自动按 `2.0` 生效。
 
-### 3. QGC 设置
+### 3. BlueOS 与 QGC 一次性设置
 
-一键脚本使用固定端口：
+BlueOS 使用固定输出：
 
 ```text
-MAVLink 14550 → ROS 14551 + QGC 14552
-Video   5600  → QGC 5701 + Recorder 5702
+MAVLink：14550 给 QGC，14551 给 ROS 飞控网关
+视频：   5600 给 QGC，5700 给软件分流器
 ```
 
-QGC 只设置一次：
-
-- MAVLink UDP 监听端口：`14552`；
-- 视频：`UDP H.264`，端口 `5701`；
-- 开启 Low Latency；
-- 删除会直接抢占 `14550` 或 `5600` 的旧自动连接。
+QGC 开启 UDP 自动连接，视频保持默认 `5600`，并开启 Low Latency。
+BlueOS 的两个 MAVLink Endpoint 和同一摄像头的两个 UDP 输出保存后，
+每天采集不再手动改端口。录像器在岸上监听软件分流后的 `5704`。
 
 QGC 保留作观察和人工上锁，不要同时使用 QGC 手柄与键盘抢控制权。
 
@@ -174,7 +171,7 @@ output/datasets/YYYYMMDD_HHMMSS/
 - `video_raw.mkv`：相机原始 H.264 封装，不重新编码；
 - `events.csv`：键盘事件、四轴指令、深度、航向和模式；
 - `session.json`：Git 版本、配置哈希、可选启动深度、开始/结束时间与退出原因；
-- `logs/`：MAVProxy、网关、预检和视频分流日志。
+- `logs/`：网关、预检、视频分流和录像日志。
 
 抽帧示例：
 
@@ -193,8 +190,8 @@ ffmpeg -i video_raw.mkv -vf "fps=5" -q:v 2 frames/%06d.jpg
 脚本提示端口占用时查看：
 
 ```bash
-ss -lunp | grep -E ':(14550|14551|14552|5600|5701|5702)\b'
+ss -lunp | grep -E ':(14550|14551|5600|5700|5704)\b'
 ```
 
 它只会清理自己启动的后台进程，不会擅自关闭 QGC。旧测试脚本或旧
-MAVProxy 仍在运行时，先回原终端安全退出，再重新执行一键命令。
+网关仍在运行时，先回原终端安全退出，再重新执行一键命令。

@@ -42,7 +42,7 @@ ros2 interface show rov_interfaces/srv/SetGripper >/dev/null
 ros2 interface show rov_interfaces/msg/NormalizedMotionCommand >/dev/null
 
 EXECUTABLES="$(ros2 pkg executables rov_competition)"
-for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_dataset_drive rov_dataset_record rov_frame_extractor rov_turn_test rov_replay rov_stream_bridge; do
+for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_dataset_drive rov_dataset_record rov_field_setup rov_frame_extractor rov_gripper_test rov_turn_test rov_replay rov_stream_bridge rov_search_approach_test; do
   if ! grep -q " ${REQUIRED}$" <<<"${EXECUTABLES}"; then
     echo "缺少 ROS 命令入口: ${REQUIRED}" >&2
     exit 1
@@ -61,11 +61,36 @@ if [[ ! -x "${PROJECT_DIR}/scripts/start_frame_extractor.sh" ]]; then
   echo "缺少桌面抽帧启动脚本" >&2
   exit 1
 fi
+if [[ ! -x "${PROJECT_DIR}/scripts/start_search_approach_test.sh" ]]; then
+  echo "缺少搜索—接近一键水池测试脚本" >&2
+  exit 1
+fi
+if [[ ! -x "${PROJECT_DIR}/scripts/start_grasp_position_test.sh" ]]; then
+  echo "缺少抓取位置标定一键脚本" >&2
+  exit 1
+fi
+if [[ ! -x "${PROJECT_DIR}/scripts/start_gripper_test.sh" ]]; then
+  echo "缺少机械爪候选测试一键脚本" >&2
+  exit 1
+fi
+if [[ ! -x "${PROJECT_DIR}/scripts/start_tomorrow_test.sh" ]]; then
+  echo "缺少明日联调总向导脚本" >&2
+  exit 1
+fi
 
 VIDEO_LAUNCH="$(ros2 pkg prefix --share rov_competition)/launch/video_test.launch.py"
 if [[ ! -r "${VIDEO_LAUNCH}" ]]; then
   echo "缺少一键视频 launch 文件: ${VIDEO_LAUNCH}" >&2
   exit 1
 fi
+PACKAGE_SHARE="$(ros2 pkg prefix --share rov_competition)"
+for REQUIRED_FILE in \
+  "${PACKAGE_SHARE}/launch/perception_only.launch.py" \
+  "${PACKAGE_SHARE}/config/search_test.yaml"; do
+  if [[ ! -r "${REQUIRED_FILE}" ]]; then
+    echo "缺少已安装的搜索测试文件: ${REQUIRED_FILE}" >&2
+    exit 1
+  fi
+done
 
 echo "ROS 2 Humble 构建、测试、接口和命令入口检查全部通过。"

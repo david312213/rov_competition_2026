@@ -97,6 +97,8 @@ mission:
   reacquire_yaw_command: 0.05
   reacquire_timeout_s: 90.0
 
+  # 必须不小于 robot.yaml 最长开/闭爪渐变时间。
+  # 默认曲线最长 11 个间隔 × 0.125s = 1.375s。
   gripper_hold_s: 1.5
   gripper_command_timeout_s: 3.0
 

@@ -160,23 +160,10 @@ class AutonomousGraspMission:
         self._gripper_command_accepted = True
         self._gripper_accepted_at = now
         if action == GripperAction.OPEN and self.state == MissionState.PREPARING:
-            error = self._observation_error(observation)
-            if error:
-                return self._abort(error, observation, now)
-            self._start_depth_m = observation.depth_m
-            self._target_depth_m = observation.depth_m + self.config.descent_delta_m
-            if self._target_depth_m > self.config.maximum_operation_depth_m:
-                return self._abort(
-                    "相对下潜目标超过最大作业深度", observation, now
-                )
-            self._enter(MissionState.DESCENDING, now, observation)
             return self._decision(
                 MotionCommand.neutral(),
                 observation,
-                message=(
-                    f"开爪命令已接受；从 {self._start_depth_m:.2f} m "
-                    f"下潜到 {self._target_depth_m:.2f} m"
-                ),
+                message="开爪渐变已接受，四轴保持中位等待发完",
             )
         if action == GripperAction.CLOSE and self.state == MissionState.GRASPING:
             self._grasp_attempts += 1
@@ -308,12 +295,40 @@ class AutonomousGraspMission:
     def _step_preparing(
         self, observation: MissionObservation, now: float
     ) -> MissionDecision:
-        """等待带确认的开爪服务响应。"""
+        """等待开爪请求被接受，并给渐变曲线留出完整时间。"""
 
-        if self._elapsed(now) >= self.config.gripper_command_timeout_s:
-            return self._abort("打开机械爪的服务响应超时", observation, now)
+        if not self._gripper_command_accepted:
+            if self._elapsed(now) >= self.config.gripper_command_timeout_s:
+                return self._abort("打开机械爪的服务响应超时", observation, now)
+            return self._decision(
+                MotionCommand.neutral(), observation, message="等待网关确认开爪命令"
+            )
+        if self._gripper_accepted_at is None:
+            return self._abort("开爪接受时间丢失", observation, now)
+        elapsed = now - self._gripper_accepted_at
+        if elapsed < self.config.gripper_hold_s:
+            return self._decision(
+                MotionCommand.neutral(),
+                observation,
+                message=(
+                    f"开爪渐变发送中，四轴保持中位 "
+                    f"{elapsed:.2f}/{self.config.gripper_hold_s:.2f}s"
+                ),
+            )
+
+        # 开爪等待结束后再记录启动深度，避免在爪子扫动期间就开始下潜。
+        self._start_depth_m = observation.depth_m
+        self._target_depth_m = observation.depth_m + self.config.descent_delta_m
+        if self._target_depth_m > self.config.maximum_operation_depth_m:
+            return self._abort("相对下潜目标超过最大作业深度", observation, now)
+        self._enter(MissionState.DESCENDING, now, observation)
         return self._decision(
-            MotionCommand.neutral(), observation, message="等待网关确认开爪命令"
+            MotionCommand.neutral(),
+            observation,
+            message=(
+                f"开爪等待结束；从 {self._start_depth_m:.2f} m "
+                f"下潜到 {self._target_depth_m:.2f} m"
+            ),
         )
 
     def _step_descending(

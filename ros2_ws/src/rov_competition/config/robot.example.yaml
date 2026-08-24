@@ -22,7 +22,9 @@ control:
   # commissioning 只允许单轴/转向测试；autonomy 只允许自主节点。
   # 网关启动后不允许在两种来源之间切换。
   profile: "commissioning"
-  allowed_flight_modes: ["MANUAL"]
+  # commissioning 水池工具使用 ALT_HOLD，由 ArduSub 负责定深和姿态稳定。
+  # 通用 commissioning 工具保留 MANUAL；搜索—接近测试自身仍强制 ALT_HOLD。
+  allowed_flight_modes: ["MANUAL", "ALT_HOLD"]
 
   # 必须对照实物与 ArduSub 机架图填写 2 或 3。null 会阻止任何真实执行。
   expected_frame_config: null
@@ -61,10 +63,55 @@ safety:
   arm_ack_timeout_s: 3.0
 
 gripper:
-  # 绝对 SERVO 输出号；旧代码的“4 + 8”没有足够实机证据，因此默认不授权。
-  output_channel: 12
-  open_pwm: 1650
-  close_pwm: 1900
+  # 候选测试不需要改本行；start_gripper_test.sh 会生成安全配置副本。
+  # 只有某档案真实开/闭均通过后，才把这里改成该档案并重启网关。
+  # 照片看不出信号线接在哪个 Pixhawk 输出口，不能凭机械外形判断。
+  active_profile: "dalian"
+
+  profiles:
+    dalian:
+      # 旧大连代码：servo=4 再加 8，实际是 S12/AUX4；逐步开合。
+      calibrated: false
+      allow_extended_pwm: false
+      step_interval_s: 0.125
+      outputs:
+        - output_channel: 12
+          open:
+            start_pwm: 1775
+            end_pwm: 1900
+            step_pwm: 25
+          close:
+            start_pwm: 1900
+            end_pwm: 1625
+            step_pwm: -25
+
+    rst:
+      # RST packaged_part/camera_gimbal_control/gimabal_tilt_servo3.py：
+      # 左执行器 S11/AUX3，右执行器 S10/AUX2；两路一起构成一次开/闭动作。
+      calibrated: false
+      # RST 历史闭爪值包含 500us，明显超出常见舵机范围。只有断开推进器、
+      # 核对接线和驱动器规格后，才允许人工把本项改为 true。
+      allow_extended_pwm: false
+      step_interval_s: 0.125
+      outputs:
+        - output_channel: 11
+          open:
+            start_pwm: 950
+            end_pwm: 950
+            step_pwm: 25
+          close:
+            start_pwm: 1450
+            end_pwm: 1450
+            step_pwm: 25
+        - output_channel: 10
+          open:
+            start_pwm: 1050
+            end_pwm: 1050
+            step_pwm: 25
+          close:
+            start_pwm: 500
+            end_pwm: 500
+            step_pwm: -25
 
 depth:
   # 旧代码把 AHRS2.altitude 取负作为深度。必须用实测水深确认消息、字段和单位。

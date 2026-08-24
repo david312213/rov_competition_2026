@@ -1,5 +1,6 @@
-"""自主任务飞控遥测安全门测试。"""
+"""控制网关与自主任务共用安全门测试。"""
 
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from rov_competition.safety import (
     AutonomyTelemetryStatus,
     autonomy_control_error,
     autonomy_safety_error,
+    is_fresh_telemetry,
+    validate_command_envelope,
 )
 
 PACKAGE = (
@@ -59,6 +62,21 @@ def healthy_control_status() -> AutonomyControlStatus:
         flight_mode="ALT_HOLD",
         received_monotonic=100.0,
     )
+
+
+def command_envelope_error(**overrides):
+    """使用一组合法默认值执行运动命令封套检查。"""
+
+    arguments = {
+        "source": "commissioning",
+        "expected_source": "commissioning",
+        "values": (0.05, 0.0, 0.0, 0.0),
+        "stamp_s": 100.0,
+        "now_s": 100.1,
+        "maximum_age_s": 0.25,
+    }
+    arguments.update(overrides)
+    return validate_command_envelope(**arguments)
 
 
 def test_healthy_telemetry_allows_autonomy() -> None:
@@ -173,3 +191,32 @@ def test_fake_gateway_requires_preflight_runtime_and_ros_arming() -> None:
             now=100.1,
         )
         assert expected in error
+
+
+def test_telemetry_timestamp_expires() -> None:
+    """旧深度或姿态不得被持续当作实时数据发布。"""
+
+    assert is_fresh_telemetry(10.0, now=10.5, timeout_s=1.0) is True
+    assert is_fresh_telemetry(10.0, now=11.1, timeout_s=1.0) is False
+    assert is_fresh_telemetry(None, now=10.0, timeout_s=1.0) is False
+
+
+def test_fresh_expected_command_source_is_accepted() -> None:
+    assert command_envelope_error() is None
+
+
+def test_wrong_command_source_is_rejected() -> None:
+    assert "非法命令来源" in command_envelope_error(source="autonomy")
+
+
+def test_missing_stale_and_future_command_timestamps_are_rejected() -> None:
+    assert "缺少" in command_envelope_error(stamp_s=0.0)
+    assert "过期" in command_envelope_error(stamp_s=99.0)
+    assert "超前" in command_envelope_error(stamp_s=101.0)
+
+
+def test_invalid_command_numbers_are_rejected() -> None:
+    assert "NaN/Inf" in command_envelope_error(
+        values=(math.nan, 0.0, 0.0, 0.0)
+    )
+    assert "[-1, 1]" in command_envelope_error(values=(1.01, 0.0, 0.0, 0.0))

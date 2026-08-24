@@ -6,16 +6,20 @@
 
 > 完全浸没 → 下潜 0.30 m → 右转扫描 360° → 无目标时估算前进 0.40 m → 对准 → 接近 → 闭爪 → 上升回收
 
-目前没有 DVL，所以深度和转角可以闭环，水平前进距离只能按实测速度估算。机械爪尚未产生过可观察的物理动作，因此必须保持独立禁用。
+目前没有 DVL，所以深度和转角可以闭环，水平前进距离只能按实测速度估算。机械爪保留 `dalian`（单路 S12 渐变）和 `rst`（双路 S11+S10）两个候选档案；照片无法代替接线核对，两者默认都未标定、禁止真实输出。
 
 ## 新同学先只看这些
 
 | 你要做什么 | 去哪里 |
 |---|---|
+| 明天按顺序恢复 QGC、测爪子、换权重和测逻辑 | [明日联调 README](docs/明日联调README.md) |
 | 第一次安装或更新 | [安装与更新](docs/安装与更新.md) |
 | 连实艇、点动、标定 | [实机操作](docs/实机操作.md) |
 | 用手柄驾驶并录像 | [手柄采集 README](docs/手柄采集README.md) |
 | 用键盘驾驶并录像 | [键盘采集 README](docs/键盘采集README.md) |
+| 测试“搜索—对准—接近”逻辑 | [搜索接近测试 README](docs/搜索接近测试README.md) |
+| 标定和测试机械爪 | [实机操作](docs/实机操作.md) 第 9.1 节 |
+| 记录成功抓取时的框位置和大小 | [实机操作](docs/实机操作.md) 第 11.4 节 |
 | 把录像导出成全部或均匀取样图片 | [抽帧工具 README](docs/抽帧工具README.md) |
 | 理解自主流程 | [自主任务](docs/自主任务.md) |
 | 查 ROS 话题和服务 | [ROS 接口](docs/ROS接口.md) |
@@ -47,10 +51,17 @@ rov_competition_2026/
 | 视频输入和 RTP 解码 | `video.py` |
 | QGC/YOLO 原始视频分流 | `stream_bridge.py` |
 | MAVLink 与飞控通信 | `vehicle.py` |
+| 命令时间戳、遥测新鲜度和安全门 | `safety.py` |
 | ROS 自主节点 | `ros_nodes/autonomy_node.py` |
 | ROS 飞控网关 | `ros_nodes/vehicle_gateway_node.py` |
 
-这些文件都在 `ros2_ws/src/rov_competition/rov_competition/`。其余小文件大多是测试工具、数据结构或兼容入口，遇到具体问题再看。
+这些文件都在 `ros2_ws/src/rov_competition/rov_competition/`。其余文件按用途分成三组：
+
+- `axis_test.py`、`turn_test.py`、`search_approach*.py`：水池测试工具；
+- `dataset_*.py`、`frame_extractor*.py`、`grasp_calibration.py`：数据采集、抽帧和抓取标定工具；
+- `domain.py`、`commissioning*.py`、`targets.py`：多处共用的数据结构和小逻辑。
+
+这些模块虽然名字相近，但运行权限和故障处理不同，不把它们硬塞进一个大文件。
 
 ## 命名约定：简单即可
 
@@ -114,6 +125,30 @@ ros2 run rov_competition rov_replay \
 
 `rov_replay` 不连 MAVLink，画面会标记 `SIMULATION`，不能作为实艇验收证据。
 
+## 明日联调总入口
+
+端口、机械爪、新权重、自动接近和人工抓取标定已统一到一个
+交互式向导：
+
+```bash
+cd /home/persica/rov_competition_2026
+./scripts/start_tomorrow_test.sh
+```
+
+也可以逐步运行：
+
+```bash
+./scripts/start_tomorrow_test.sh qgc
+./scripts/start_tomorrow_test.sh gripper
+./scripts/start_tomorrow_test.sh weights
+./scripts/start_tomorrow_test.sh search
+./scripts/start_tomorrow_test.sh calibrate
+```
+
+它只是“一个入口”，不会无人值守连续执行危险步骤。每次解锁、爪子
+测试和权重替换都有独立的现场条件与确认词。详见
+[明日联调 README](docs/明日联调README.md)。
+
 ## 一键查看 QGC 和 YOLO
 
 安装和编译完成后，视频测试不再需要手动开三四个终端：
@@ -123,10 +158,14 @@ cd /home/persica/rov_competition_2026
 ./scripts/start_video_test.sh
 ```
 
-它会启动 `5600 → 5701(QGC) + 5702(YOLO)` 分流、YOLO，并尝试打开
-QGC 和带框查看器。这个入口故意不启动飞控网关，因此不会解锁或驱动
+QGC 继续直接接收 BlueOS 发往默认 `5600` 的画面；脚本只处理 BlueOS
+发往 `5700` 的软件副流，并复制给 `5702` 的 YOLO。它会启动 YOLO，
+并尝试打开 QGC 和带框查看器。这个入口故意不启动飞控网关，因此不会解锁或驱动
 机器人。按 `Ctrl+C` 即可一起停止视频分流和 YOLO。首次 QGC 设置和排错
 方法见 [实机操作](docs/实机操作.md) 第 7 节。
+
+这个入口现在只做视频与识别，不再混入控制或抓取标定。需要自动扫描、
+对准后再用 WASD 精调时，使用后面的“抓取位置标定”独立入口。
 
 ## 一键键盘驾驶和数据集录像
 
@@ -143,8 +182,9 @@ cd /home/persica/rov_competition_2026
 多轴同时按下时保留每轴功率，混控仍由 ArduSub 完成。
 键盘采集允许姿态消息短时中断 `3.0 s`，但不放宽心跳断链检查。
 控制状态阈值为 `2.0 s`，并会在每个窗口周期清理积压的 ROS 回调。
-脚本编排 MAVProxy、飞控网关、
-`5600 → 5701(QGC) + 5702(原始 MKV 录像)` 和键盘窗口。
+脚本直接接收 BlueOS 发往 `14551` 的 ROS MAVLink，启动飞控网关，
+并把 `5700` 软件视频副流复制到 `5704` 原始 MKV 录像器和键盘窗口。
+QGC 独立使用默认 `14550` 和 `5600`，不会经过本脚本。
 它不会自动沉底；只有录像、ALT_HOLD、预检和现场确认
 全部通过后才允许解锁。按键、可选的按 `0` 回收以及
 Esc/Ctrl+C 急停的详细说明见
@@ -159,11 +199,43 @@ cd /home/persica/rov_competition_2026
 ./scripts/start_dataset_recording.sh
 ```
 
-它会自动尝试打开 QGC，只进行
-`5600 → 5701(QGC) + 5702(MKV 录像)`，不启动
-MAVProxy、飞控网关、YOLO、机械爪或任何控制节点。开始后立即
+它会自动尝试打开 QGC；QGC 直接使用默认 `5600`，脚本只将 BlueOS
+发往 `5700` 的软件副流复制到 `5704` 录像器。它不启动飞控网关、
+YOLO、机械爪或任何控制节点。开始后立即
 录像，回到终端按 Enter 或 `Ctrl+C` 完整封装 MKV。详见
 [手柄采集 README](docs/手柄采集README.md)。
+
+## 一键搜索—接近与抓取位置标定
+
+两种水池流程共用同一套“下潜、搜索、漏检确认和偏航对准”状态机，但稳定
+对准后的行为不同：
+
+```bash
+cd /home/persica/rov_competition_2026
+
+# 自动对准后继续自动接近；不闭爪
+./scripts/start_search_approach_test.sh
+
+# 自动对准后停车，切换到 WASD 人工精调和抓取样本记录
+./scripts/start_grasp_position_test.sh
+```
+
+启动后按提示输入相对下潜距离、下潜最大 power 和固定确认词。自动模式达到
+面积阈值后回收；人工模式用 `Enter/G` 保存闭爪前证据、`C` 闭爪、`Y/N`
+记录实物成败。`0` 正常回到启动深度并上锁；`Space` 只回中/暂停，
+`Esc`、关闭窗口或 `Ctrl+C` 走急停路径。完整键位和明日顺序见
+[搜索接近测试 README](docs/搜索接近测试README.md)。
+
+机械爪还未确定是哪套接线时，必须先断开推进器并分别执行：
+
+```bash
+./scripts/start_gripper_test.sh dalian
+# 上锁、断电并重新核对接线后，才可测试：
+./scripts/start_gripper_test.sh rst
+```
+
+候选测试不会修改 `robot.yaml`，也不会自动把任何档案标成已标定。只有开、闭
+两种实物动作都由操作员确认后，才能人工启用该档案和机械爪权限。
 
 ## 一键桌面抽帧
 
@@ -188,7 +260,7 @@ cd /home/persica/rov_competition_2026
 4. ROS 只读遥测和预检。
 5. `rov_axis_test` 从 `0.05 / 0.3s` 单动作开始。
 6. `rov_turn_test` 按 `30° → 90° → 180° → 360°` 验收。
-7. 单独追线并验证机械爪；目前未通过。
+7. 断开推进器动力后，先追线判断 `dalian` 或 `rst` 档案，再单独验证开闭值；目前仅代码通过，实物未通过。
 8. 标定图像方向、前进估算速度和框面积阈值。
 9. 最后才启动自主任务。
 

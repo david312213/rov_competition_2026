@@ -1,4 +1,8 @@
-"""一键启动原始 RTP 分流和 YOLO，只做视频测试，不连接飞控网关。"""
+"""一键启动软件视频分流和 YOLO，不连接飞控网关。
+
+QGC 直接使用 BlueOS -> 5600 默认视频；本 launch 只处理
+BlueOS -> 5700 -> YOLO 5702，两条链路互不抢占。
+"""
 
 from launch import LaunchDescription
 from launch.actions import (
@@ -27,10 +31,7 @@ def generate_launch_description() -> LaunchDescription:
             "rov_stream_bridge",
             "--source-port",
             LaunchConfiguration("source_port"),
-            "--qgc-host",
-            LaunchConfiguration("qgc_host"),
-            "--qgc-port",
-            LaunchConfiguration("qgc_port"),
+            "--no-qgc",
             "--inference-host",
             LaunchConfiguration("ai_host"),
             "--inference-port",
@@ -58,6 +59,8 @@ def generate_launch_description() -> LaunchDescription:
                 "gstreamer": True,
                 "udp_mpegts": False,
                 "display_window": False,
+                # 禁用任务启动服务；节点只运行感知循环，不发布运动。
+                "perception_only": True,
             }
         ],
         on_exit=[EmitEvent(event=Shutdown(reason="YOLO 感知节点已经退出"))],
@@ -68,9 +71,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("robot_config"),
             DeclareLaunchArgument("autonomy_config"),
             DeclareLaunchArgument("targets_config"),
-            DeclareLaunchArgument("source_port", default_value="5600"),
-            DeclareLaunchArgument("qgc_host", default_value="127.0.0.1"),
-            DeclareLaunchArgument("qgc_port", default_value="5701"),
+            DeclareLaunchArgument("source_port", default_value="5700"),
             DeclareLaunchArgument("ai_host", default_value="127.0.0.1"),
             DeclareLaunchArgument("ai_port", default_value="5702"),
             # 子节点启动 Python 时忽略 ~/.local，防止 CPU Torch 覆盖 CUDA 版。

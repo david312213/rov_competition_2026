@@ -11,7 +11,7 @@
 | `/rov/control/set_armed` | `rov_interfaces/srv/SetArmed` | 操作员/任务收尾 → 网关 | 解锁要求确认词 `ARM ROV`；上锁不要求确认词 |
 | `/rov/control/emergency_stop` | `std_srvs/srv/Trigger` | 任意安全层 → 网关 | 回中、尝试正常上锁、释放并锁存急停 |
 | `/rov/control/reset_emergency_stop` | `std_srvs/srv/Trigger` | 操作员 → 网关 | 仅在明确上锁、心跳新鲜、预检通过时复位 |
-| `/rov/control/set_gripper` | `rov_interfaces/srv/SetGripper` | 自主节点 → 网关 | 带时间戳、来源和 `OPEN/CLOSE` 枚举；响应只说明是否接受 |
+| `/rov/control/set_gripper` | `rov_interfaces/srv/SetGripper` | 自主节点 → 网关 | 带时间戳、来源和 `OPEN/CLOSE` 枚举；执行 `robot.yaml` 当前机械爪档案，成功只表示命令序列已开始，不表示已抓牢 |
 
 ## 2. 感知与任务
 
@@ -26,6 +26,16 @@
 
 `/rov/autonomy/start` 和 `/rov/autonomy/abort` 暂时保留为旧命令兼容别名。
 
+`start_grasp_position_test.sh` 共用上面的控制、遥测、感知和机械爪接口。
+自动对准完成后，测试节点继续以唯一的 `commissioning` 来源发布 WASD
+运动命令；QGC 此时只观察和保留人工上锁能力。`Enter/G → C → Y/N` 的
+顺序分别对应“保存闭爪前证据 → 请求闭爪 → 人工确认实物结果”。
+
+`start_gripper_test.sh dalian|rst` 是独立的上锁台架工具：它不启动 ROS
+飞控网关、不创建运动发布器、不调用解锁服务，而是通过独立 MAVLink 端点
+发送候选舵机命令并逐条等待 ACK。它仍要求 ROS 环境只是为了复用命令入口，
+但不新增 ROS 话题或服务。
+
 带框图像通过独立 ROS 话题查看：
 
 ```bash
@@ -38,7 +48,7 @@ ros2 run rqt_image_view rqt_image_view
 
 ## 3. 来源互斥
 
-- `control.profile: commissioning` 时，网关只接受来源 `commissioning`；用于 `rov_axis_test`、`rov_turn_test` 和兼容 `rov_motion_test`。
+- `control.profile: commissioning` 时，网关只接受来源 `commissioning`；用于 `rov_axis_test`、`rov_turn_test` 和机械爪标定。
 - `control.profile: autonomy` 时，网关只接受来源 `autonomy`；用于自主节点。
 - 网关运行期间不能动态切换。切换前必须回中、上锁、停止网关，修改 YAML 后重启。
 

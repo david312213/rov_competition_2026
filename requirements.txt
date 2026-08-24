@@ -11,8 +11,6 @@ pymavlink>=2.4.41,<3
 pygame>=2.5,<3
 # 抽帧桌面软件使用 Tk 原生拖放；体积远小于完整 Qt 运行时。
 tkinterdnd2==0.6.2
-# 一键脚本用 MAVProxy 将 BlueOS 的一份 MAVLink 分给 ROS 和 QGC。
-MAVProxy==1.8.74
 PyYAML>=6,<7
 pytest>=8,<9
 # ROS 2 Humble 的 colcon-core 不支持 setuptools 80+。

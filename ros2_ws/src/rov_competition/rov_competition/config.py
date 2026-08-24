@@ -129,6 +129,150 @@ class RcOverrideConfig:
 
 
 @dataclass(frozen=True)
+class GripperSweepConfig:
+    """一次开爪或闭爪的 PWM 渐变。
+
+    旧大连工程不是只发送一个终点值，而是按固定步长连续发送一组
+    ``MAV_CMD_DO_SET_SERVO``。把起点、终点和步长写进配置，既能复现
+    实艇旧逻辑，也能在换舵机后只改 YAML，不再复制一份脚本。
+    """
+
+    start_pwm: int
+    end_pwm: int
+    step_pwm: int
+
+    def __post_init__(self) -> None:
+        """拒绝越界、零步长和朝错误方向变化的序列。"""
+
+        # RST 原型的右侧执行器闭爪值是 500us。这里只允许配置文件忠实描述
+        # 500..2500 的历史候选范围；是否真的允许超出常见 800..2200，仍由
+        # GripperConfig.allow_extended_pwm 和实艇安全门共同决定。
+        if not 500 <= self.start_pwm <= 2500 or not 500 <= self.end_pwm <= 2500:
+            raise ConfigurationError("机械爪 PWM 必须在 500..2500")
+        if self.step_pwm == 0 or abs(self.step_pwm) > 200:
+            raise ConfigurationError("机械爪 PWM 步长必须非零且绝对值不超过 200")
+        delta = self.end_pwm - self.start_pwm
+        if delta != 0 and (delta > 0) != (self.step_pwm > 0):
+            raise ConfigurationError("机械爪 PWM 步长方向必须指向终点")
+
+    def values(self) -> tuple[int, ...]:
+        """返回包含首尾值的有限 PWM 序列。"""
+
+        if self.start_pwm == self.end_pwm:
+            return (self.start_pwm,)
+        values = [self.start_pwm]
+        current = self.start_pwm
+        if self.step_pwm > 0:
+            while current < self.end_pwm:
+                current = min(self.end_pwm, current + self.step_pwm)
+                values.append(current)
+        else:
+            while current > self.end_pwm:
+                current = max(self.end_pwm, current + self.step_pwm)
+                values.append(current)
+        return tuple(values)
+
+
+@dataclass(frozen=True)
+class GripperOutputConfig:
+    """一个机械爪执行器对应的绝对 SERVO 输出和开闭曲线。"""
+
+    output_channel: int
+    open_sweep: GripperSweepConfig
+    close_sweep: GripperSweepConfig
+
+    def __post_init__(self) -> None:
+        """输出号必须是 MAVLink SERVO 实例号，不接受 AUX 相对编号。"""
+
+        if not 1 <= self.output_channel <= 32:
+            raise ConfigurationError("机械爪绝对 SERVO 输出号必须在 1..32")
+
+    def sweep_for(self, action: str) -> GripperSweepConfig:
+        """按领域动作名返回该执行器的曲线。"""
+
+        if action == "open":
+            return self.open_sweep
+        if action == "close":
+            return self.close_sweep
+        raise ConfigurationError(f"未知机械爪动作: {action}")
+
+
+@dataclass(frozen=True)
+class GripperConfig:
+    """当前选中的机械爪档案；可包含一个或多个同步执行器。"""
+
+    profile: str
+    step_interval_s: float
+    calibrated: bool
+    allow_extended_pwm: bool
+    outputs: tuple[GripperOutputConfig, ...]
+
+    def __post_init__(self) -> None:
+        """在连接飞控前校验输出号和节拍。"""
+
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", self.profile):
+            raise ConfigurationError("机械爪档案名必须使用小写字母、数字或下划线")
+        if not self.outputs:
+            raise ConfigurationError("机械爪档案至少需要一个输出")
+        output_channels = [output.output_channel for output in self.outputs]
+        if len(set(output_channels)) != len(output_channels):
+            raise ConfigurationError("机械爪档案不能重复使用同一个 SERVO 输出")
+        if not math.isfinite(self.step_interval_s) or not (
+            0.02 <= self.step_interval_s <= 1.0
+        ):
+            raise ConfigurationError("机械爪每步间隔必须在 0.02..1.0 秒")
+
+    @property
+    def output_channels(self) -> tuple[int, ...]:
+        """返回档案使用的全部绝对 SERVO 输出号。"""
+
+        return tuple(output.output_channel for output in self.outputs)
+
+    @property
+    def uses_extended_pwm(self) -> bool:
+        """档案中出现常见 800..2200 范围外的历史 PWM 时返回真。"""
+
+        return any(
+            not 800 <= pwm <= 2200
+            for output in self.outputs
+            for sweep in (output.open_sweep, output.close_sweep)
+            for pwm in sweep.values()
+        )
+
+    def steps_for(self, action: str) -> tuple[tuple[tuple[int, int], ...], ...]:
+        """把一个或多个输出的曲线合成为按节拍执行的命令帧。
+
+        同一帧中的多路命令会背靠背发送；较短曲线完成后不会反复重发终点。
+        大连档案每帧只有 AUX4，RST 档案第一帧同时包含 AUX3 和 AUX2。
+        """
+
+        sweeps = tuple(
+            (output.output_channel, output.sweep_for(action).values())
+            for output in self.outputs
+        )
+        frame_count = max(len(values) for _, values in sweeps)
+        frames: list[tuple[tuple[int, int], ...]] = []
+        for index in range(frame_count):
+            frame = tuple(
+                (output_channel, values[index])
+                for output_channel, values in sweeps
+                if index < len(values)
+            )
+            frames.append(frame)
+        return tuple(frames)
+
+    def all_pwm_values(self) -> tuple[int, ...]:
+        """返回当前档案全部开闭候选值，供预检和报告使用。"""
+
+        return tuple(
+            pwm
+            for output in self.outputs
+            for sweep in (output.open_sweep, output.close_sweep)
+            for pwm in sweep.values()
+        )
+
+
+@dataclass(frozen=True)
 class RobotConfig:
     """飞控连接、运动协议、实艇预检和执行安全门配置。"""
 
@@ -157,9 +301,7 @@ class RobotConfig:
     arm_ack_timeout_s: float
     axis_directions: Mapping[str, int]
     rc_override: RcOverrideConfig
-    gripper_output_channel: int
-    gripper_open_pwm: int
-    gripper_close_pwm: int
+    gripper: GripperConfig
     depth_message: str
     depth_field: str
     depth_multiplier: float
@@ -218,15 +360,23 @@ class RobotConfig:
             raise ConfigurationError("allow_ros_arming=true 时必须同时允许真实执行")
         if self.allow_gripper_actuation and not self.allow_live_actuation:
             raise ConfigurationError("允许机械爪动作时必须同时允许真实执行")
+        if self.allow_gripper_actuation and not self.gripper.calibrated:
+            raise ConfigurationError(
+                "允许机械爪动作前必须完成实机标定并设置 gripper.calibrated: true"
+            )
+        if (
+            self.allow_gripper_actuation
+            and self.gripper.uses_extended_pwm
+            and not self.gripper.allow_extended_pwm
+        ):
+            raise ConfigurationError(
+                "当前机械爪档案包含 800..2200 之外的历史 PWM；"
+                "实测确认后还必须显式设置 allow_extended_pwm: true"
+            )
         if self.expected_gcs_failsafe_action not in (1, 2, 3, 4):
             raise ConfigurationError("expected_gcs_failsafe_action 必须是 1..4")
-        if not 1 <= self.gripper_output_channel <= 16:
-            raise ConfigurationError("机械爪绝对输出号必须在 1..16")
-        for value in (self.gripper_open_pwm, self.gripper_close_pwm):
-            if not 800 <= value <= 2200:
-                raise ConfigurationError("机械爪 PWM 必须在 800..2200")
-        if self.gripper_open_pwm == self.gripper_close_pwm:
-            raise ConfigurationError("机械爪开合 PWM 不能相同")
+        if self.gripper.steps_for("open") == self.gripper.steps_for("close"):
+            raise ConfigurationError("机械爪开合 PWM 序列不能完全相同")
         if not re.fullmatch(r"[A-Z][A-Z0-9_]*", self.depth_message):
             raise ConfigurationError("depth.message 必须是 MAVLink 消息名")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.depth_field):
@@ -452,6 +602,117 @@ class AutonomyConfig:
     mission: MissionConfig
 
 
+def _load_gripper_config(data: Mapping[str, Any]) -> GripperConfig:
+    """读取可切换的机械爪档案，并兼容旧本地 YAML。
+
+    新格式只加载 ``active_profile`` 指定的一份档案，网关运行中不能切换。
+    旧格式仍可读取，以免队员的本地 ``robot.yaml`` 阻止遥测启动，但会被
+    强制标记为未标定，不能绕过机械爪安全门。
+    """
+
+    def sweep(section: Mapping[str, Any]) -> GripperSweepConfig:
+        """读取一条开爪或闭爪曲线。"""
+
+        return GripperSweepConfig(
+            start_pwm=int(section["start_pwm"]),
+            end_pwm=int(section["end_pwm"]),
+            step_pwm=int(section["step_pwm"]),
+        )
+
+    def output(section: Mapping[str, Any], name: str) -> GripperOutputConfig:
+        """读取一个绝对 SERVO 输出及其开闭曲线。"""
+
+        open_data = _mapping(section.get("open", {}), f"{name}.open")
+        close_data = _mapping(section.get("close", {}), f"{name}.close")
+        return GripperOutputConfig(
+            output_channel=int(section["output_channel"]),
+            open_sweep=sweep(open_data),
+            close_sweep=sweep(close_data),
+        )
+
+    def profile(
+        profile_name: str, section: Mapping[str, Any], name: str
+    ) -> GripperConfig:
+        """读取一个单路或多路机械爪档案。"""
+
+        raw_outputs = section.get("outputs")
+        if not isinstance(raw_outputs, list) or not raw_outputs:
+            raise ConfigurationError(f"{name}.outputs 必须是非空列表")
+        outputs = tuple(
+            output(
+                _mapping(item, f"{name}.outputs[{index}]"),
+                f"{name}.outputs[{index}]",
+            )
+            for index, item in enumerate(raw_outputs)
+        )
+        return GripperConfig(
+            profile=profile_name,
+            step_interval_s=_finite(
+                section.get("step_interval_s", 0.125), f"{name}.step_interval_s"
+            ),
+            calibrated=_boolean(
+                section.get("calibrated", False), f"{name}.calibrated"
+            ),
+            allow_extended_pwm=_boolean(
+                section.get("allow_extended_pwm", False),
+                f"{name}.allow_extended_pwm",
+            ),
+            outputs=outputs,
+        )
+
+    if "profiles" in data:
+        active_profile = str(data.get("active_profile", "")).strip()
+        if not active_profile:
+            raise ConfigurationError("gripper.active_profile 不能为空")
+        profiles = _mapping(data["profiles"], "gripper.profiles")
+        if active_profile not in profiles:
+            raise ConfigurationError(
+                f"gripper.active_profile={active_profile!r} 不存在于 profiles"
+            )
+        section = _mapping(
+            profiles[active_profile], f"gripper.profiles.{active_profile}"
+        )
+        return profile(
+            active_profile, section, f"gripper.profiles.{active_profile}"
+        )
+
+    # 兼容已经部署过的单输出渐变格式。
+    output_channel = int(data["output_channel"])
+    if "open" in data or "close" in data:
+        single_output = output(data, "gripper")
+        return GripperConfig(
+            profile=str(data.get("profile", "dalian")).strip(),
+            step_interval_s=_finite(
+                data.get("step_interval_s", 0.125), "gripper.step_interval_s"
+            ),
+            calibrated=_boolean(
+                data.get("calibrated", False), "gripper.calibrated"
+            ),
+            allow_extended_pwm=_boolean(
+                data.get("allow_extended_pwm", False),
+                "gripper.allow_extended_pwm",
+            ),
+            outputs=(single_output,),
+        )
+
+    # 更老的单次 PWM 格式只允许读取，不承认已经完成标定。
+    open_pwm = int(data["open_pwm"])
+    close_pwm = int(data["close_pwm"])
+    return GripperConfig(
+        profile="legacy",
+        step_interval_s=0.125,
+        calibrated=False,
+        allow_extended_pwm=False,
+        outputs=(
+            GripperOutputConfig(
+                output_channel=output_channel,
+                open_sweep=GripperSweepConfig(open_pwm, open_pwm, 25),
+                close_sweep=GripperSweepConfig(close_pwm, close_pwm, -25),
+            ),
+        ),
+    )
+
+
 def load_robot_config(path: str | Path) -> RobotConfig:
     """读取机器人配置。
 
@@ -558,9 +819,7 @@ def load_robot_config(path: str | Path) -> RobotConfig:
                 name: int(value) for name, value in directions_data.items()
             },
             rc_override=rc_override,
-            gripper_output_channel=int(gripper["output_channel"]),
-            gripper_open_pwm=int(gripper["open_pwm"]),
-            gripper_close_pwm=int(gripper["close_pwm"]),
+            gripper=_load_gripper_config(gripper),
             depth_message=str(depth.get("message", "AHRS2")).upper(),
             depth_field=str(depth.get("field", "altitude")),
             depth_multiplier=_finite(depth.get("multiplier", -1.0), "depth.multiplier"),

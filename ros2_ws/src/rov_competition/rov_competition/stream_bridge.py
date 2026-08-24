@@ -1,4 +1,9 @@
-"""把一份艇载 RTP/H.264 原始数据包复制给多个本机使用者。"""
+"""把一份艇载 RTP/H.264 原始数据包复制给多个本机使用者。
+
+默认拓扑中 QGC 直接接收 BlueOS 发到 5600 的视频，本工具只监听
+BlueOS 的第二路 5700，再原样复制到 YOLO 5702 和录像器 5704。
+底层命令行仍允许自定义端口，便于故障兼容；一键脚本不再经由本工具转发 QGC。
+"""
 
 from __future__ import annotations
 
@@ -97,7 +102,7 @@ def build_pipeline_arguments(
     """创建不经过 shell 解释的 GStreamer 参数列表。
 
     QGC、AI 和可选录像器共用一个 ``multiudpsink``。进入该分支前没有解包、解析、
-    重封装或编码操作，所以两端收到的是 5600 上原始 RTP 包的本机副本。
+    重封装或编码操作，所以各端收到的是源端口上原始 RTP 包的本机副本。
     只有可选的本机显示和 RTMP 分支会另外解码或封装，它们不改变分流包。
     """
 
@@ -227,10 +232,11 @@ def main() -> None:
     """启动视频分流，并把 Ctrl+C 正确转发给 GStreamer。"""
 
     parser = argparse.ArgumentParser(description="ROV RTP/H.264 原始包分流")
-    parser.add_argument("--source-port", type=_port, default=5600)
+    parser.add_argument("--source-port", type=_port, default=5700)
     parser.add_argument("--payload-type", type=int, default=96)
-    parser.add_argument("--qgc-host", default="127.0.0.1")
-    parser.add_argument("--qgc-port", type=_port, default=5701)
+    # 新拓扑默认不转发 QGC；故障兼容时必须显式同时给出 host/port。
+    parser.add_argument("--qgc-host")
+    parser.add_argument("--qgc-port", type=_port)
     parser.add_argument("--no-qgc", action="store_true", help="禁用 QGC 转发分支")
     parser.add_argument("--inference-host", default="127.0.0.1")
     parser.add_argument("--inference-port", type=_port, default=5702)

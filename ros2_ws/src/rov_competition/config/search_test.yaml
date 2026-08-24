@@ -1,0 +1,61 @@
+# 0.2.0rc2 搜索—接近水池测试参数
+#
+# 启动时的相对下潜距离与下潜最大 power 由操作员在终端输入。
+# 本文件保存测试流程的其他参数，不包含推进器编号或 PWM。
+
+search_test:
+  maximum_operation_depth_m: 20.0
+  descent_tolerance_m: 0.05
+  descent_gain: 0.80
+  descent_minimum_command: 0.10
+  descent_settle_s: 1.0
+  descent_timeout_s: 45.0
+
+  # 键2对应的向右偏航方向。
+  scan_yaw_command: 0.20
+  scan_angle_deg: 360.0
+  scan_tolerance_deg: 3.0
+  scan_timeout_s: 120.0
+  maximum_yaw_step_deg: 45.0
+  maximum_search_cycles: 3
+
+  # 没找到目标时，使用键W对应方向。
+  advance_forward_command: 0.40
+  advance_duration_s: 2.0
+
+  aim_x_ratio: 0.50
+  horizontal_tolerance: 0.08
+  realign_threshold: 0.12
+  alignment_frames: 3
+  yaw_gain: 0.80
+  minimum_yaw_command: 0.10
+  maximum_yaw_command: 0.20
+
+  far_area_ratio: 0.07
+  stop_area_ratio: 0.10
+  far_forward_command: 0.20
+  near_forward_command: 0.10
+  approach_yaw_command: 0.10
+  maximum_target_area_ratio: 0.80
+
+  acquisition_window_frames: 5
+  acquisition_required_hits: 3
+  loss_required_frames: 3
+  loss_confirmation_s: 0.30
+  finish_window_frames: 5
+  finish_required_hits: 4
+  maximum_tracking_jump_ratio: 0.25
+  minimum_tracking_iou: 0.05
+
+  # 稳定对准后进入人工抓取标定时使用；不影响自动接近模式。
+  manual_initial_command: 0.10
+  manual_minimum_command: 0.05
+  manual_maximum_command: 0.40
+  manual_command_step: 0.01
+  minimum_success_samples: 5
+
+  return_gain: 0.50
+  return_maximum_command: 0.20
+  return_tolerance_m: 0.05
+  return_settle_s: 1.0
+  return_timeout_s: 60.0

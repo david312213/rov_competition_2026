@@ -54,6 +54,7 @@ def _runtime_common_error(
     config: DatasetCollectionConfig,
     *,
     source: str,
+    allow_gripper: bool = False,
 ) -> str | None:
     """返回预解锁和活动控制共用的安全拒绝原因。"""
 
@@ -97,7 +98,7 @@ def _runtime_common_error(
         return "本次网关未允许真实输出"
     if not snapshot.allows_arming:
         return "本次网关未允许 ROS 解锁"
-    if snapshot.allows_gripper:
+    if snapshot.allows_gripper and not allow_gripper:
         return "数据采集期间机械爪权限必须关闭"
     if snapshot.command_source and snapshot.command_source != source:
         return f"网关当前命令来源不是 {source!r}"
@@ -111,10 +112,13 @@ def prearm_safety_error(
     config: DatasetCollectionConfig,
     *,
     source: str = "commissioning",
+    allow_gripper: bool = False,
 ) -> str | None:
     """预解锁假网关检查；完全安全时返回空。"""
 
-    error = _runtime_common_error(snapshot, config, source=source)
+    error = _runtime_common_error(
+        snapshot, config, source=source, allow_gripper=allow_gripper
+    )
     if error is not None:
         return error
     if snapshot.runtime_enabled:
@@ -133,10 +137,13 @@ def active_safety_error(
     config: DatasetCollectionConfig,
     *,
     source: str = "commissioning",
+    allow_gripper: bool = False,
 ) -> str | None:
     """活动键盘控制检查；任一安全事实改变就返回原因。"""
 
-    error = _runtime_common_error(snapshot, config, source=source)
+    error = _runtime_common_error(
+        snapshot, config, source=source, allow_gripper=allow_gripper
+    )
     if error is not None:
         return error
     if not snapshot.runtime_enabled:

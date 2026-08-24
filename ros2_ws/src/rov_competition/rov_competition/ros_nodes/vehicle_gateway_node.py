@@ -20,9 +20,8 @@ from std_msgs.msg import Bool, Float32, Int16, String
 from std_srvs.srv import SetBool, Trigger
 
 from rov_competition.config import RobotConfig, load_robot_config
-from rov_competition.control_safety import validate_command_envelope
 from rov_competition.domain import ControlState, GripperAction, MotionCommand
-from rov_competition.safety import is_fresh_telemetry
+from rov_competition.safety import is_fresh_telemetry, validate_command_envelope
 from rov_competition.vehicle import MavlinkVehicle, VehicleError
 
 ARM_CONFIRMATION = "ARM ROV"
@@ -139,7 +138,8 @@ class VehicleGatewayNode(Node):
         arm_state = "ENABLED" if effective_arming else "DISABLED"
         self.get_logger().info(
             f"MAVLink 已连接；真实输出 {output_state}；ROS 解锁 {arm_state}；"
-            f"协议 {self._config.control_protocol.value}"
+            f"协议 {self._config.control_protocol.value}；"
+            f"机械爪档案 {self._config.gripper.profile}"
         )
 
     def _boolean_parameter(self, name: str) -> bool:
@@ -289,13 +289,17 @@ class VehicleGatewayNode(Node):
                 f"无效机械爪动作枚举: {int(request.action)}", response
             )
         try:
-            self._vehicle.set_gripper(action)
+            step_count, duration_s = self._vehicle.set_gripper(action)
         except VehicleError as exc:
             self._enter_emergency_stop(f"机械爪执行失败: {exc}")
             response.success = False
             response.message = self._reason
             return response
-        self._reason = f"机械爪 {action.value} 命令已接受（无物理抓牢反馈）"
+        self._reason = (
+            f"机械爪档案 {self._config.gripper.profile} 的 {action.value} 序列已开始："
+            f"{step_count} 个节拍，"
+            f"预计 {duration_s:.2f}s 发完（无位置/抓牢反馈）"
+        )
         response.success = True
         response.message = self._reason
         return response
@@ -528,6 +532,12 @@ class VehicleGatewayNode(Node):
         if snapshot.armed is True and mode not in self._config.allowed_flight_modes:
             self._enter_emergency_stop(f"飞控模式变为 {mode or 'UNKNOWN'}")
             return
+        if self._vehicle.gripper_active:
+            try:
+                self._vehicle.update_gripper()
+            except VehicleError as exc:
+                self._enter_emergency_stop(f"机械爪渐变中止: {exc}")
+                return
         if self._state == ControlState.ACTIVE and self._vehicle.command_timed_out():
             self._enter_emergency_stop("运动命令超时")
             return

@@ -7,7 +7,6 @@ YOLO 推理帧率可能随 GPU 负载波动，但飞控网关的命令看门狗�
 
 from __future__ import annotations
 
-import math
 import threading
 import time
 from dataclasses import dataclass
@@ -94,6 +93,10 @@ class AutonomyNode(Node):
         self.declare_parameter("annotated_rtp_host", "")
         self.declare_parameter("annotated_rtp_port", 0)
         self.declare_parameter("command_source", "autonomy")
+        # 搜索—接近水池测试复用本节点的 GPU 感知链，但任务状态与
+        # 运动指令由独立 commissioning 节点发布。该模式不发布冲突的
+        # /rov/mission/status，也不开放正式自主启动/中止服务。
+        self.declare_parameter("perception_only", False)
 
         robot_path = str(self.get_parameter("robot_config").value)
         autonomy_path = str(self.get_parameter("autonomy_config").value)
@@ -102,6 +105,7 @@ class AutonomyNode(Node):
         use_gstreamer = self._boolean_parameter("gstreamer")
         use_udp_mpegts = self._boolean_parameter("udp_mpegts")
         self._display_window = self._boolean_parameter("display_window")
+        self._perception_only = self._boolean_parameter("perception_only")
         if use_gstreamer and use_udp_mpegts:
             raise ValueError("gstreamer 和 udp_mpegts 不能同时启用")
         if self._display_window:
@@ -212,7 +216,7 @@ class AutonomyNode(Node):
             10,
             callback_group=telemetry_group,
         )
-        self._start_services = [
+        self._start_services = [] if self._perception_only else [
             self.create_service(
                 Trigger,
                 name,
@@ -221,7 +225,7 @@ class AutonomyNode(Node):
             )
             for name in ("/rov/mission/start", "/rov/autonomy/start")
         ]
-        self._abort_services = [
+        self._abort_services = [] if self._perception_only else [
             self.create_service(
                 Trigger,
                 name,
@@ -246,7 +250,12 @@ class AutonomyNode(Node):
             0.05, self._control_tick, callback_group=control_group
         )
         self.get_logger().info(
-            "Model/video ready; detection is active; autonomous motion is NOT started"
+            "Model/video ready; detection is active; "
+            + (
+                "perception-only mode; this node cannot start autonomous motion"
+                if self._perception_only
+                else "autonomous motion is NOT started"
+            )
         )
 
     def _boolean_parameter(self, name: str) -> bool:
@@ -408,7 +417,8 @@ class AutonomyNode(Node):
             observation = self._build_observation(now)
             self._poll_gripper_future(observation, now)
             if not self._active:
-                self._publish_mission_status(self._latest_decision, observation)
+                if not self._perception_only:
+                    self._publish_mission_status(self._latest_decision, observation)
                 return
             telemetry_error = autonomy_safety_error(
                 self._telemetry_status, self._config.mission, now=now
