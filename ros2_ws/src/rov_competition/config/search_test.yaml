@@ -14,6 +14,11 @@ search_test:
   descent_settle_s: 1.0
   descent_timeout_s: 45.0
 
+  # 检测帧超过 hold 时间未更新就回中，但容忍偶发解码卡顿；
+  # 只有连续超过 abort 时间才中止整个任务。
+  perception_hold_timeout_s: 0.50
+  perception_abort_timeout_s: 3.0
+
   # 键2对应的向右偏航方向。
   scan_yaw_command: 0.20
   scan_angle_deg: 360.0

@@ -109,12 +109,23 @@ def lock_and_approach(mission: SearchApproachMission) -> tuple[int, float, Detec
 
 def test_config_matches_rc2_pool_parameters() -> None:
     assert BASE.descent_slowdown_distance_m == pytest.approx(0.20)
+    assert BASE.perception_hold_timeout_s == pytest.approx(0.50)
+    assert BASE.perception_abort_timeout_s == pytest.approx(3.0)
     assert BASE.scan_yaw_command == pytest.approx(0.20)
     assert BASE.advance_forward_command == pytest.approx(0.40)
     assert BASE.advance_duration_s == pytest.approx(2.0)
     assert BASE.stop_area_ratio == pytest.approx(0.10)
     assert BASE.acquisition_required_hits == 3
     assert BASE.finish_required_hits == 4
+
+
+def test_perception_abort_timeout_must_follow_hold_timeout() -> None:
+    with pytest.raises(SearchTestError, match="感知中止"):
+        replace(
+            BASE,
+            perception_hold_timeout_s=3.0,
+            perception_abort_timeout_s=3.0,
+        )
 
 
 def test_start_uses_operator_relative_depth_and_power() -> None:
@@ -228,7 +239,7 @@ def test_duplicate_frame_does_not_count_towards_acquisition() -> None:
 
 
 def test_invalid_or_stale_perception_stops_motion_without_counting_a_miss() -> None:
-    """断流由 ROS 层在1秒后急停；此前纯状态机只允许回中等待。"""
+    """断流由 ROS 层分级处理；纯状态机始终只允许回中等待。"""
 
     mission = started()
     frame, now = reach_scan(mission)

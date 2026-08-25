@@ -62,6 +62,11 @@ class SearchApproachConfig:
     descent_settle_s: float = 1.0
     descent_timeout_s: float = 45.0
 
+    # 检测帧暂停更新时，状态机会先回中等待；只有连续
+    # 超过此时间才把它判定为真正的感知断流并中止任务。
+    perception_hold_timeout_s: float = 0.50
+    perception_abort_timeout_s: float = 3.0
+
     scan_yaw_command: float = 0.20
     scan_angle_deg: float = 360.0
     scan_tolerance_deg: float = 3.0
@@ -119,6 +124,8 @@ class SearchApproachConfig:
             self.descent_slowdown_distance_m,
             self.descent_settle_s,
             self.descent_timeout_s,
+            self.perception_hold_timeout_s,
+            self.perception_abort_timeout_s,
             self.scan_yaw_command,
             self.scan_angle_deg,
             self.scan_tolerance_deg,
@@ -152,6 +159,8 @@ class SearchApproachConfig:
         )
         if any(not math.isfinite(value) or value <= 0.0 for value in positive):
             raise SearchTestError("搜索测试的数值参数必须是大于 0 的有限数")
+        if self.perception_abort_timeout_s <= self.perception_hold_timeout_s:
+            raise SearchTestError("感知中止时间必须大于回中等待时间")
         commands = (
             self.descent_minimum_command,
             self.scan_yaw_command,

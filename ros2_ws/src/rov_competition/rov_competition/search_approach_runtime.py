@@ -910,6 +910,7 @@ def main(argv: list[str] | None = None) -> int:
         last_manual_motion = MotionCommand.neutral()
         last_state = decision.state
         gripper_event = ""
+        perception_hold_started_at: float | None = None
         clock = pygame.time.Clock()
         next_publish = time.monotonic()
 
@@ -1093,12 +1094,29 @@ def main(argv: list[str] | None = None) -> int:
             error = _active_error(node, dataset, allow_gripper=manual_mode)
             if error is not None:
                 raise DatasetDriveError(error)
-            if node.perception_age_s() > MAXIMUM_PERCEPTION_AGE_S:
-                raise DatasetDriveError("超过 1.0 秒没有新鲜检测帧")
+            perception_age = node.perception_age_s()
+            if perception_age > search.perception_abort_timeout_s:
+                raise DatasetDriveError(
+                    f"超过 {search.perception_abort_timeout_s:.1f} 秒"
+                    "没有新鲜检测帧"
+                )
             if not recorder.is_stream_fresh(maximum_idle_s=3.0):
                 raise DatasetDriveError("原始视频录像停止增长")
             observation = node.observation()
             now = time.monotonic()
+            perception_holding = (
+                perception_age > search.perception_hold_timeout_s
+            )
+            if perception_holding and not paused:
+                if perception_hold_started_at is None:
+                    perception_hold_started_at = now
+            elif perception_hold_started_at is not None:
+                # 感知停顿时实际没有执行扫描或前进，因此
+                # 恢复后同步顺延状态超时和定时前进的计时基准。
+                mission.delay_timers(now - perception_hold_started_at)
+                perception_hold_started_at = None
+                if not paused:
+                    operator_message = "检测帧已恢复，继续任务"
             # 人工精调也不能在停帧时沿用旧画面继续走。
             # 状态机稍后会消费这个帧号，因此必须先记下本轮
             # 是否真的收到新检测帧。
@@ -1126,6 +1144,16 @@ def main(argv: list[str] | None = None) -> int:
                     scan_progress_deg=decision.scan_progress_deg,
                     search_cycle=decision.search_cycle,
                     outcome=decision.outcome,
+                )
+            elif perception_holding:
+                decision = replace(
+                    decision,
+                    motion=MotionCommand.neutral(),
+                    message=(
+                        f"检测帧暂停 {perception_age:.2f}s，"
+                        "已回中等待"
+                    ),
+                    current_depth_m=observation.depth_m,
                 )
             else:
                 decision = mission.step(observation, now)
