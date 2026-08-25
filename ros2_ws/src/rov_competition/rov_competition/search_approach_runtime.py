@@ -217,7 +217,7 @@ class SearchSessionLogger:
             "start_depth_m": None,
             "relative_descent_m": None,
             "target_depth_m": None,
-            "descent_maximum_command": None,
+            "descent_command": None,
             "end_depth_m": None,
             "video_file": None,
             "gripper_profile": gripper_profile,
@@ -231,14 +231,14 @@ class SearchSessionLogger:
         start_depth_m: float,
         relative_descent_m: float,
         target_depth_m: float,
-        descent_maximum_command: float,
+        descent_command: float,
     ) -> None:
         self.metadata.update(
             {
                 "start_depth_m": start_depth_m,
                 "relative_descent_m": relative_descent_m,
                 "target_depth_m": target_depth_m,
-                "descent_maximum_command": descent_maximum_command,
+                "descent_command": descent_command,
             }
         )
         self._write_metadata()
@@ -690,7 +690,7 @@ def _interactive_parameters(
     descent_ceiling = min(0.80, robot_command_limit)
     descent_default = min(0.60, descent_ceiling)
     descent_power = _prompt_float(
-        "下潜最大 power ",
+        "下潜固定 power ",
         descent_default,
         0.10,
         descent_ceiling,
@@ -705,7 +705,7 @@ def _interactive_parameters(
     print(f"  启动深度：{start_depth:.2f} m")
     print(f"  相对下潜：{relative:.2f} m")
     print(f"  目标深度：{target_depth:.2f} m")
-    print(f"  下潜最大 power：{descent_power:.2f}")
+    print(f"  下潜固定 power：{descent_power:.2f}")
     print(
         "\n解锁前确认：ROV 已浸没、危险区无人、ALT_HOLD、"
         "QGC 遥测和 5600 画面正常、QGC 可人工上锁、安全员可断电。"
@@ -734,7 +734,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # dataset.yaml 在此只提供链路新鲜度和 ALT_HOLD 安全阈值。除下潜外
-    # 的固定测试动作最大为 0.40；下潜上限由操作员现场输入，
+    # 的固定测试动作最大为 0.40；固定下潜值由操作员现场输入，
     # 并受 robot.yaml command_limit 二次限制。
     errors = list(
         search.readiness_errors(
@@ -857,7 +857,7 @@ def main(argv: list[str] | None = None) -> int:
         selected_power_errors = search.readiness_errors(
             robot_command_limit=robot.command_limit,
             workflow=workflow,
-            descent_maximum_command=descent_power,
+            descent_command=descent_power,
         )
         if selected_power_errors:
             raise DatasetDriveError("; ".join(selected_power_errors))
@@ -865,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
             start_depth_m=start_depth,
             relative_descent_m=relative,
             target_depth_m=target_depth,
-            descent_maximum_command=descent_power,
+            descent_command=descent_power,
         )
 
         for _ in range(5):
@@ -898,7 +898,7 @@ def main(argv: list[str] | None = None) -> int:
         decision = mission.start(
             observation,
             relative_descent_m=relative,
-            descent_maximum_command=descent_power,
+            descent_command=descent_power,
             now=time.monotonic(),
         )
         node.publish(decision.motion)

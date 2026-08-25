@@ -78,7 +78,7 @@ def started(
     mission.start(
         observation(0, depth=1.0),
         relative_descent_m=0.30,
-        descent_maximum_command=0.20,
+        descent_command=0.20,
         now=0.0,
     )
     return mission
@@ -108,7 +108,6 @@ def lock_and_approach(mission: SearchApproachMission) -> tuple[int, float, Detec
 
 
 def test_config_matches_rc2_pool_parameters() -> None:
-    assert BASE.descent_slowdown_distance_m == pytest.approx(0.20)
     assert BASE.perception_hold_timeout_s == pytest.approx(0.50)
     assert BASE.perception_abort_timeout_s == pytest.approx(3.0)
     assert BASE.scan_yaw_command == pytest.approx(0.20)
@@ -133,12 +132,12 @@ def test_start_uses_operator_relative_depth_and_power() -> None:
     decision = mission.start(
         observation(7, depth=0.20),
         relative_descent_m=0.50,
-        descent_maximum_command=0.60,
+        descent_command=0.60,
         now=1.0,
     )
     assert mission.start_depth_m == pytest.approx(0.20)
     assert decision.target_depth_m == pytest.approx(0.70)
-    assert mission.descent_maximum_command == pytest.approx(0.60)
+    assert mission.descent_command == pytest.approx(0.60)
     descent = mission.step(observation(8, depth=0.20), 1.05)
     assert descent.motion.vertical == pytest.approx(-0.60)
 
@@ -150,25 +149,38 @@ def test_invalid_descent_power_is_rejected(value: float) -> None:
         mission.start(
             observation(0),
             relative_descent_m=0.30,
-            descent_maximum_command=value,
+            descent_command=value,
             now=0.0,
         )
 
 
-def test_descent_uses_selected_maximum_then_slows_near_target() -> None:
-    """远处使用操作员输入的上限，最后一段再按距离减速。"""
+def test_descent_matches_fixed_keyboard_down_command() -> None:
+    """达到目标容差前始终使用操作员输入的固定下潜值。"""
 
     mission = SearchApproachMission(FAST, ("echinus",))
     mission.start(
         observation(0, depth=0.20),
         relative_descent_m=0.30,
-        descent_maximum_command=0.60,
+        descent_command=0.60,
         now=0.0,
     )
     far = mission.step(observation(1, depth=0.20), 0.05)
     assert far.motion.vertical == pytest.approx(-0.60)
     near = mission.step(observation(2, depth=0.40), 0.10)
-    assert near.motion.vertical == pytest.approx(-0.30)
+    assert near.motion.vertical == pytest.approx(-0.60)
+
+
+def test_descent_overshoot_stops_instead_of_reversing_at_full_power() -> None:
+    mission = SearchApproachMission(FAST, ("echinus",))
+    mission.start(
+        observation(0, depth=0.20),
+        relative_descent_m=0.30,
+        descent_command=0.60,
+        now=0.0,
+    )
+    decision = mission.step(observation(1, depth=0.57), 0.05)
+    assert decision.state == SearchTestState.DESCENDING
+    assert decision.motion.is_neutral()
 
 
 def test_scan_accumulates_right_turn_across_north() -> None:
@@ -400,11 +412,11 @@ def test_robot_limit_must_cover_point_four_command() -> None:
 def test_robot_limit_must_cover_operator_descent_power() -> None:
     assert BASE.readiness_errors(
         robot_command_limit=0.80,
-        descent_maximum_command=0.80,
+        descent_command=0.80,
     ) == ()
     error = BASE.readiness_errors(
         robot_command_limit=0.40,
-        descent_maximum_command=0.60,
+        descent_command=0.60,
     )
     assert error and "0.60" in error[0]
 

@@ -1,6 +1,6 @@
 # 0.2.0rc2 搜索—接近水池测试参数
 #
-# 启动时的相对下潜距离与下潜最大 power 由操作员在终端输入。
+# 启动时的相对下潜距离与固定下潜 power 由操作员在终端输入。
 # 本文件保存测试流程的其他参数，不包含推进器编号或 PWM。
 
 search_test:
@@ -8,9 +8,6 @@ search_test:
   descent_tolerance_m: 0.05
   descent_gain: 0.80
   descent_minimum_command: 0.10
-  # 距目标深度大于等于此值时使用现场输入的最大 power；
-  # 最后 0.20m 内按剩余距离线性减速。
-  descent_slowdown_distance_m: 0.20
   descent_settle_s: 1.0
   descent_timeout_s: 45.0
 

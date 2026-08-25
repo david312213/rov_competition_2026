@@ -58,7 +58,6 @@ class SearchApproachConfig:
     descent_tolerance_m: float = 0.05
     descent_gain: float = 0.8
     descent_minimum_command: float = 0.10
-    descent_slowdown_distance_m: float = 0.20
     descent_settle_s: float = 1.0
     descent_timeout_s: float = 45.0
 
@@ -121,7 +120,6 @@ class SearchApproachConfig:
             self.descent_tolerance_m,
             self.descent_gain,
             self.descent_minimum_command,
-            self.descent_slowdown_distance_m,
             self.descent_settle_s,
             self.descent_timeout_s,
             self.perception_hold_timeout_s,
@@ -217,7 +215,7 @@ class SearchApproachConfig:
         *,
         robot_command_limit: float,
         workflow: SearchWorkflow = SearchWorkflow.AUTO_APPROACH,
-        descent_maximum_command: float | None = None,
+        descent_command: float | None = None,
     ) -> tuple[str, ...]:
         """列出 robot.yaml 不足以执行测试的原因。"""
 
@@ -230,13 +228,13 @@ class SearchApproachConfig:
         )
         if workflow == SearchWorkflow.MANUAL_GRASP_CALIBRATION:
             required = max(required, self.manual_maximum_command)
-        if descent_maximum_command is not None:
+        if descent_command is not None:
             if (
-                not math.isfinite(descent_maximum_command)
-                or not 0.10 <= descent_maximum_command <= 0.80
+                not math.isfinite(descent_command)
+                or not 0.10 <= descent_command <= 0.80
             ):
-                return ("下潜最大 power 必须在 0.10..0.80",)
-            required = max(required, descent_maximum_command)
+                return ("下潜 power 必须在 0.10..0.80",)
+            required = max(required, descent_command)
         if robot_command_limit + 1e-9 < required:
             return (
                 f"robot.yaml command_limit={robot_command_limit:.2f} 小于测试所需 {required:.2f}",
@@ -356,7 +354,7 @@ class SearchApproachMission:
         self.state = SearchTestState.IDLE
         self.start_depth_m: float | None = None
         self.target_depth_m: float | None = None
-        self.descent_maximum_command = 0.20
+        self.descent_command = 0.20
         self.state_started_at = 0.0
         self.settled_since: float | None = None
         self.search_cycle = 0
@@ -380,7 +378,7 @@ class SearchApproachMission:
         observation: MissionObservation,
         *,
         relative_descent_m: float,
-        descent_maximum_command: float,
+        descent_command: float,
         now: float,
     ) -> SearchTestDecision:
         """记录启动深度并进入相对下潜。"""
@@ -391,10 +389,10 @@ class SearchApproachMission:
         if not math.isfinite(relative_descent_m) or relative_descent_m <= 0.0:
             raise SearchTestError("相对下潜距离必须大于 0")
         if (
-            not math.isfinite(descent_maximum_command)
-            or not 0.10 <= descent_maximum_command <= 0.80
+            not math.isfinite(descent_command)
+            or not 0.10 <= descent_command <= 0.80
         ):
-            raise SearchTestError("下潜最大 power 必须在 0.10..0.80")
+            raise SearchTestError("下潜 power 必须在 0.10..0.80")
         target_depth = observation.depth_m + relative_descent_m
         if target_depth > self.config.maximum_operation_depth_m:
             raise SearchTestError(
@@ -403,7 +401,7 @@ class SearchApproachMission:
             )
         self.start_depth_m = float(observation.depth_m)
         self.target_depth_m = target_depth
-        self.descent_maximum_command = float(descent_maximum_command)
+        self.descent_command = float(descent_command)
         self.outcome = "running"
         self.last_frame_id = observation.frame_id
         self._clear_target()
@@ -555,7 +553,9 @@ class SearchApproachMission:
         if now - self.state_started_at >= self.config.descent_timeout_s:
             return self.abort("相对下潜超时", observation)
         error = self.target_depth_m - observation.depth_m
-        if abs(error) <= self.config.descent_tolerance_m:
+        # 达到目标或因惯性略微超过时立即回中，不用反向
+        # 大 power 反复修正。ALT_HOLD 会接管当前深度。
+        if error <= self.config.descent_tolerance_m:
             if self.settled_since is None:
                 self.settled_since = now
             if now - self.settled_since >= self.config.descent_settle_s:
@@ -564,18 +564,10 @@ class SearchApproachMission:
                 return self._decision(MotionCommand.neutral(), observation, "下潜完成，开始向右扫描")
             return self._decision(MotionCommand.neutral(), observation, "进入深度容差，等待稳定")
         self.settled_since = None
-        # “下潜最大 power”应该真正在距离目标较远时生效。旧式为
-        # abs(error) * descent_gain：默认相对下潜 0.30m 时，即使输入
-        # 0.40，实际也只会发 0.24。现在在距目标大于等于减速距离时
-        # 发送选定的最大值；进入最后一段后按剩余距离线性减速。
-        slowdown_ratio = min(
-            1.0,
-            abs(error) / self.config.descent_slowdown_distance_m,
-        )
-        magnitude = self.descent_maximum_command * slowdown_ratio
-        magnitude = max(self.config.descent_minimum_command, magnitude)
-        # vertical > 0 是上升；目标更深时发负值，过深时允许小幅上升纠正。
-        vertical = -magnitude if error > 0.0 else magnitude
+        # 与键盘工具按住“↓”完全一致：到达深度容差前，
+        # 持续发送操作员输入的固定负向 vertical。不再在最后
+        # 0.20m 自动降功率，避免指令落入该艇的正浮力/死区。
+        vertical = -self.descent_command
         return self._decision(
             MotionCommand(vertical=vertical),
             observation,

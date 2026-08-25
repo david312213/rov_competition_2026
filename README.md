@@ -220,7 +220,7 @@ cd /home/persica/rov_competition_2026
 ./scripts/start_grasp_position_test.sh
 ```
 
-启动后按提示输入相对下潜距离、下潜最大 power 和固定确认词。自动模式达到
+启动后按提示输入相对下潜距离、固定下潜 power 和固定确认词。自动模式达到
 面积阈值后回收；人工模式用 `Enter/G` 保存闭爪前证据、`C` 闭爪、`Y/N`
 记录实物成败。`0` 正常回到启动深度并上锁；`Space` 只回中/暂停，
 `Esc`、关闭窗口或 `Ctrl+C` 走急停路径。完整键位和明日顺序见
