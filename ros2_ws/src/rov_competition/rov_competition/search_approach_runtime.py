@@ -763,6 +763,10 @@ def _interactive_parameters(
         f"{search_config.scan_yaw_command:.2f}；每 "
         f"{search_config.scan_report_step_deg:.0f}° 输出里程碑"
     )
+    if search_config.image_yaw_sign == 1:
+        print("  对准：画面左框 -> 键1左转；画面右框 -> 键2右转")
+    else:
+        print("  对准：镜像模式，画面左框 -> 右转；画面右框 -> 左转")
     print(
         f"  硬深度上限：{search_config.maximum_operation_depth_m:.2f} m"
     )

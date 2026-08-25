@@ -122,6 +122,7 @@ def test_config_matches_rc2_pool_parameters() -> None:
     assert BASE.scan_report_step_deg == pytest.approx(15.0)
     assert BASE.advance_forward_command == pytest.approx(0.40)
     assert BASE.advance_duration_s == pytest.approx(2.0)
+    assert BASE.image_yaw_sign == 1
     assert BASE.stop_area_ratio == pytest.approx(0.10)
     assert BASE.acquisition_required_hits == 3
     assert BASE.loss_required_frames == 5
@@ -168,6 +169,12 @@ def test_return_minimum_cannot_exceed_return_maximum() -> None:
             return_minimum_command=0.70,
             return_maximum_command=0.60,
         )
+
+
+@pytest.mark.parametrize("value", (-2, 0, 2))
+def test_image_yaw_sign_only_accepts_direct_or_mirrored_mapping(value: int) -> None:
+    with pytest.raises(SearchTestError, match="image_yaw_sign"):
+        replace(BASE, image_yaw_sign=value)
 
 
 def test_bottom_detection_parameters_must_not_make_confirmation_impossible() -> None:
@@ -540,7 +547,7 @@ def test_abnormally_full_screen_box_is_not_a_valid_target() -> None:
     assert mission.tracked is None
 
 
-def test_left_box_turns_right_and_right_box_turns_left() -> None:
+def test_left_box_turns_left_and_right_box_turns_right() -> None:
     mission = started()
     frame, now = reach_scan(mission)
     left = target(left=20, right=120)
@@ -551,14 +558,30 @@ def test_left_box_turns_right_and_right_box_turns_left() -> None:
     assert decision.state == SearchTestState.ALIGNING
     # 第 3 次命中已经完成目标确认，这张帧必须立即
     # 产生偏航命令，不应额外插入一帧停车。
-    assert decision.motion.yaw > 0.0
+    assert decision.horizontal_error is not None and decision.horizontal_error < 0.0
+    assert decision.motion.yaw < 0.0
 
     mission.tracked = target(left=520, right=620)
     frame += 1
     decision = mission.step(
         observation(frame, detections=(mission.tracked,), depth=1.30), now + 0.05
     )
-    assert decision.motion.yaw < 0.0
+    assert decision.horizontal_error is not None and decision.horizontal_error > 0.0
+    assert decision.motion.yaw > 0.0
+
+
+def test_mirrored_image_mapping_reverses_alignment_direction() -> None:
+    mission = started(replace(FAST, image_yaw_sign=-1))
+    frame, now = reach_scan(mission)
+    left = target(left=20, right=120)
+    for _ in range(3):
+        frame += 1
+        now += 0.05
+        decision = mission.step(
+            observation(frame, detections=(left,), depth=1.30), now
+        )
+    assert decision.horizontal_error is not None and decision.horizontal_error < 0.0
+    assert decision.motion.yaw > 0.0
 
 
 def test_alignment_short_misses_hold_yaw_without_state_flapping() -> None:
@@ -572,7 +595,7 @@ def test_alignment_short_misses_hold_yaw_without_state_flapping() -> None:
             observation(frame, detections=(left,), depth=1.30), now
         )
     expected_yaw = decision.motion.yaw
-    assert expected_yaw > 0.0
+    assert expected_yaw < 0.0
 
     frame += 1
     first = mission.step(observation(frame, depth=1.30), now + 0.05)
@@ -753,6 +776,31 @@ def test_approach_speed_changes_at_area_point_zero_seven() -> None:
     frame += 1
     decision = mission.step(observation(frame, detections=(near,), depth=1.30), now + 0.10)
     assert decision.motion.forward == pytest.approx(0.10)
+
+
+def test_approach_correction_turns_towards_box_side() -> None:
+    mission = started()
+    frame, now, _item = lock_and_approach(mission)
+
+    # 中心 x=0.60，仍在 0.12 的重新对准阈值内；应边前进
+    # 边向右小幅修正，而不是向左把框推得更远。
+    right = target(left=340, right=428, top=180, bottom=300)
+    frame += 1
+    decision = mission.step(
+        observation(frame, detections=(right,), depth=1.30), now + 0.05
+    )
+    assert decision.state == SearchTestState.APPROACHING
+    assert decision.horizontal_error == pytest.approx(0.10)
+    assert decision.motion.yaw > 0.0
+
+    left = target(left=212, right=300, top=180, bottom=300)
+    frame += 1
+    decision = mission.step(
+        observation(frame, detections=(left,), depth=1.30), now + 0.10
+    )
+    assert decision.state == SearchTestState.APPROACHING
+    assert decision.horizontal_error == pytest.approx(-0.10)
+    assert decision.motion.yaw < 0.0
 
 
 def test_finish_requires_four_of_five_new_centered_near_frames() -> None:

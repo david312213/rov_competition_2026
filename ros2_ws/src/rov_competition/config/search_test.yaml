@@ -43,6 +43,9 @@ search_test:
   advance_duration_s: 2.0
 
   aim_x_ratio: 0.50
+  # 前视画面未镜像：+1 表示左框左转、右框右转。
+  # 只有实测确认画面被镜像时才改为 -1。
+  image_yaw_sign: 1
   horizontal_tolerance: 0.08
   realign_threshold: 0.12
   alignment_frames: 3

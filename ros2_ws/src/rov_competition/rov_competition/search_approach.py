@@ -93,6 +93,8 @@ class SearchApproachConfig:
     advance_duration_s: float = 2.0
 
     aim_x_ratio: float = 0.50
+    # +1: 前视非镜像画面，左框左转/右框右转；-1: 镜像画面。
+    image_yaw_sign: int = 1
     horizontal_tolerance: float = 0.08
     realign_threshold: float = 0.12
     alignment_frames: int = 3
@@ -231,6 +233,8 @@ class SearchApproachConfig:
             raise SearchTestError("水平容差必须小于重新对准阈值")
         if not 0.0 < self.aim_x_ratio < 1.0:
             raise SearchTestError("画面瞄准点必须位于画面内")
+        if self.image_yaw_sign not in {-1, 1}:
+            raise SearchTestError("image_yaw_sign 必须是 +1 或 -1")
         if self.minimum_yaw_command > self.maximum_yaw_command:
             raise SearchTestError("最小偏航指令不能大于最大值")
         integer_values = (
@@ -1065,10 +1069,18 @@ class SearchApproachMission:
         self.aligned_frames = 0
         magnitude = min(self.config.maximum_yaw_command, abs(error) * self.config.yaw_gain)
         magnitude = max(self.config.minimum_yaw_command, magnitude)
-        # 画面左侧 error<0 -> 键2的右转 yaw>0；右侧则键1左转。
-        yaw = magnitude if error < 0.0 else -magnitude
+        # 已验收的艇体映射：yaw<0 是键1左转，yaw>0 是键2右转。
+        # 前视非镜像画面中，目标在左就应左转，在右就应右转。
+        yaw = self.config.image_yaw_sign * math.copysign(magnitude, error)
+        target_side = "画面右侧" if error > 0.0 else "画面左侧"
+        turn_direction = "右转" if yaw > 0.0 else "左转"
         decision = self._decision(
-            MotionCommand(yaw=yaw), observation, "仅用偏航对准目标", target, area, error
+            MotionCommand(yaw=yaw),
+            observation,
+            f"目标在{target_side}，执行{turn_direction}对准",
+            target,
+            area,
+            error,
         )
         self.last_alignment_decision = decision
         return decision
@@ -1094,7 +1106,13 @@ class SearchApproachMission:
         ):
             return self.request_normal_finish(observation, now, "框面积与居中连续达标，测试成功回收")
 
-        yaw = max(-self.config.approach_yaw_command, min(self.config.approach_yaw_command, -error * self.config.yaw_gain))
+        yaw = max(
+            -self.config.approach_yaw_command,
+            min(
+                self.config.approach_yaw_command,
+                self.config.image_yaw_sign * error * self.config.yaw_gain,
+            ),
+        )
         # 一旦面积达到停止阈值，第一帧就停止前进；后续只原地确认 4/5 帧，
         # 避免为了“确认稳定”继续向目标冲近。
         if area >= self.config.stop_area_ratio:
