@@ -2,7 +2,7 @@
 #
 # 启动时只输入固定下潜 power，不再输入目标深度。
 # 程序持续下潜，当最近 3 秒的深度变化不超过 0.05m 时，
-# 记录当前深度为本轮搜索深度并进入扫描。
+# 记录疑似池底，先上浮一个小间隙并稳定定深，再进入扫描。
 
 search_test:
   # 没有人工目标深度后，这是仍然保留的硬停止上限。
@@ -13,6 +13,14 @@ search_test:
   bottom_detection_minimum_descent_m: 0.10
   # 在向下推力下稳定 1 秒即回中，之后由 ALT_HOLD 定深到完整 3 秒确认结束。
   bottom_neutral_confirmation_s: 1.0
+  # 触底确认后先上浮 0.10m，稳定定深后才开始旋转，避免压底摩擦。
+  # 现场若只需 5cm，只把 bottom_clearance_m 改为 0.05。
+  bottom_clearance_m: 0.10
+  bottom_clearance_tolerance_m: 0.02
+  # 实艇日志表明 +0.20 不足以上浮；离底阶段使用独立的 +0.40。
+  bottom_clearance_up_command: 0.40
+  bottom_clearance_settle_s: 1.0
+  bottom_clearance_timeout_s: 15.0
 
   # 下列参数仍用于人工标定中按 R 后回到本轮搜索深度。
   descent_tolerance_m: 0.05

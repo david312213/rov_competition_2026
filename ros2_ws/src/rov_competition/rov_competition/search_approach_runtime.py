@@ -229,6 +229,8 @@ class SearchSessionLogger:
             "bottom_detection_depth_tolerance_m": None,
             "bottom_detection_minimum_descent_m": None,
             "bottom_neutral_confirmation_s": None,
+            "bottom_clearance_m": None,
+            "bottom_clearance_up_command": None,
             "end_depth_m": None,
             "video_file": None,
             "gripper_profile": gripper_profile,
@@ -245,6 +247,8 @@ class SearchSessionLogger:
         bottom_detection_depth_tolerance_m: float,
         bottom_detection_minimum_descent_m: float,
         bottom_neutral_confirmation_s: float,
+        bottom_clearance_m: float,
+        bottom_clearance_up_command: float,
     ) -> None:
         self.metadata.update(
             {
@@ -258,17 +262,21 @@ class SearchSessionLogger:
                     bottom_detection_minimum_descent_m
                 ),
                 "bottom_neutral_confirmation_s": bottom_neutral_confirmation_s,
+                "bottom_clearance_m": bottom_clearance_m,
+                "bottom_clearance_up_command": bottom_clearance_up_command,
             }
         )
         self._write_metadata()
 
-    def set_detected_bottom_depth(self, depth_m: float) -> None:
-        """记录状态机实际判定的池底/本轮搜索深度。"""
+    def set_detected_bottom_depth(
+        self, bottom_depth_m: float, search_depth_m: float
+    ) -> None:
+        """分别记录疑似池底和离底后的本轮搜索深度。"""
 
         self.metadata.update(
             {
-                "target_depth_m": float(depth_m),
-                "detected_bottom_depth_m": float(depth_m),
+                "target_depth_m": float(search_depth_m),
+                "detected_bottom_depth_m": float(bottom_depth_m),
             }
         )
         self._write_metadata()
@@ -697,7 +705,9 @@ def _draw_window(
             ]
         )
     else:
-        lines.append("Automatic: descend -> scan -> align -> approach -> return")
+        lines.append(
+            "Automatic: descend -> clear bottom -> scan -> align -> approach -> return"
+        )
     if decision.target_depth_m is None:
         depth_line = (
             f"depth={decision.current_depth_m or 0.0:.2f} m  "
@@ -759,6 +769,11 @@ def _interactive_parameters(
         "由 ALT_HOLD 定深完成剩余确认"
     )
     print(
+        "  触底确认后：上浮离底 "
+        f"{search_config.bottom_clearance_m:.2f} m（power "
+        f"+{search_config.bottom_clearance_up_command:.2f}），稳定定深后再扫描"
+    )
+    print(
         "  扫描：连续右转 yaw power="
         f"{search_config.scan_yaw_command:.2f}；每 "
         f"{search_config.scan_report_step_deg:.0f}° 输出里程碑"
@@ -800,8 +815,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # dataset.yaml 在此只提供链路新鲜度和 ALT_HOLD 安全阈值。
     # 扫描/前进最大为 0.40，回收上浮最大为 0.60；下潜 power
-    # 由操作员现场输入。深度平台连续稳定 3s 后状态机
-    # 自动记录触底深度。
+    # 由操作员现场输入。深度平台连续稳定 3s 后记录
+    # 疑似池底，先上浮到离底搜索深度，然后才开始扫描。
     errors = list(
         search.readiness_errors(
             robot_command_limit=robot.command_limit,
@@ -944,6 +959,8 @@ def main(argv: list[str] | None = None) -> int:
             bottom_neutral_confirmation_s=(
                 search.bottom_neutral_confirmation_s
             ),
+            bottom_clearance_m=search.bottom_clearance_m,
+            bottom_clearance_up_command=search.bottom_clearance_up_command,
         )
 
         for _ in range(5):
@@ -1269,10 +1286,14 @@ def main(argv: list[str] | None = None) -> int:
             if last_state != decision.state:
                 if (
                     last_state == SearchTestState.DESCENDING
-                    and decision.state == SearchTestState.SCANNING
+                    and decision.state == SearchTestState.CLEARING_BOTTOM
+                    and mission.bottom_depth_m is not None
                     and decision.target_depth_m is not None
                 ):
-                    logger.set_detected_bottom_depth(decision.target_depth_m)
+                    logger.set_detected_bottom_depth(
+                        mission.bottom_depth_m,
+                        decision.target_depth_m,
+                    )
                 operator_message = decision.message
                 last_state = decision.state
 

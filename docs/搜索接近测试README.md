@@ -7,6 +7,7 @@
 ```text
 输入固定下潜 power
 → 持续下潜；深度平台稳定 1 秒后回中并由 ALT_HOLD 定深，满 3 秒后记录疑似触底深度
+→ 上浮 0.10 m 脱离池底，回中稳定定深
 → 向右按真实航向扫描 360°
 → 没找到时前进 2 秒，再扫描，最多三轮
 → 最近 5 个新帧中至少 3 帧命中后锁定目标
@@ -86,8 +87,11 @@ START SEARCH TEST
 确认词正确后才会申请运行许可并解锁。它不会自动切换飞行模式。
 程序与键盘工具按住 `↓` 相同，持续发送本次输入的固定 power。
 在至少实际下潜 `0.10 m` 后，若最近 `3.0 s` 内深度最大值与最小值之差
-不超过 `0.05 m`，程序会先回中、记录当前搜索深度，再进入
-`SCANNING`。网关总限幅仍以 `robot.yaml` 的 `command_limit` 为准。
+不超过 `0.05 m`，程序会记录疑似池底，然后进入
+`CLEARING_BOTTOM`：默认以 `+0.40` 上浮 `0.10 m`，达到后回中稳定
+`1.0 s`，最后才进入 `SCANNING`。离底目标会成为本轮搜索深度，
+按 `R` 重搜时也不会再回到池底。网关总限幅仍以 `robot.yaml`
+的 `command_limit` 为准。
 
 一键脚本会在感知就绪后自动打开 `rqt_image_view`，并直接选中
 `/rov/annotated_image` 的 `compressed` 传输。该窗口显示 YOLO 检测框、
@@ -132,7 +136,9 @@ sudo apt install ros-humble-rqt-image-view
 [进入状态] DESCENDING（下潜探底）| power=0.60
 [状态进度] DESCENDING | 深度=1.43m | 疑似触底稳定=1/3s
 [探底动作] DESCENDING | 疑似触底已稳定 1.0s，升沉回中，由 ALT_HOLD 定深完成确认
-[状态切换] DESCENDING -> SCANNING | 疑似池底=1.45m
+[状态切换] DESCENDING -> CLEARING_BOTTOM | 疑似池底=1.45m
+[进入状态] CLEARING_BOTTOM（离底上浮并定深）| 目标=1.35m
+[状态切换] CLEARING_BOTTOM -> SCANNING | 已离底并稳定定深
 ```
 
 深度又变化时会立即打印 `[计时重置]`；完成和中止也会立即输出。

@@ -25,6 +25,7 @@ FAST = replace(
     BASE,
     bottom_detection_stable_s=0.10,
     bottom_neutral_confirmation_s=0.05,
+    bottom_clearance_settle_s=0.05,
     descent_settle_s=0.10,
     return_settle_s=0.10,
     alignment_frames=2,
@@ -87,11 +88,39 @@ def started(
     return mission
 
 
-def reach_scan(mission: SearchApproachMission) -> tuple[int, float]:
-    mission.step(observation(1, depth=1.30), 0.01)
-    decision = mission.step(observation(2, depth=1.30), 0.12)
-    assert decision.state == SearchTestState.SCANNING
+def reach_clearance(
+    mission: SearchApproachMission,
+    *,
+    bottom_depth_m: float = 1.30,
+) -> tuple[int, float]:
+    mission.step(observation(1, depth=bottom_depth_m), 0.01)
+    decision = mission.step(observation(2, depth=bottom_depth_m), 0.12)
+    assert decision.state == SearchTestState.CLEARING_BOTTOM
+    assert decision.motion.is_neutral()
+    assert mission.bottom_depth_m == pytest.approx(bottom_depth_m)
     return 2, 0.12
+
+
+def reach_scan(mission: SearchApproachMission) -> tuple[int, float]:
+    frame, now = reach_clearance(mission)
+    assert mission.target_depth_m is not None
+    frame += 1
+    now += 0.01
+    holding = mission.step(
+        observation(frame, depth=mission.target_depth_m),
+        now,
+    )
+    assert holding.state == SearchTestState.CLEARING_BOTTOM
+    assert holding.motion.is_neutral()
+    frame += 1
+    now += mission.config.bottom_clearance_settle_s + 0.01
+    decision = mission.step(
+        observation(frame, depth=mission.target_depth_m),
+        now,
+    )
+    assert decision.state == SearchTestState.SCANNING
+    assert decision.motion.is_neutral()
+    return frame, now
 
 
 def lock_and_approach(mission: SearchApproachMission) -> tuple[int, float, Detection]:
@@ -115,6 +144,11 @@ def test_config_matches_rc2_pool_parameters() -> None:
     assert BASE.bottom_detection_depth_tolerance_m == pytest.approx(0.05)
     assert BASE.bottom_detection_minimum_descent_m == pytest.approx(0.10)
     assert BASE.bottom_neutral_confirmation_s == pytest.approx(1.0)
+    assert BASE.bottom_clearance_m == pytest.approx(0.10)
+    assert BASE.bottom_clearance_tolerance_m == pytest.approx(0.02)
+    assert BASE.bottom_clearance_up_command == pytest.approx(0.40)
+    assert BASE.bottom_clearance_settle_s == pytest.approx(1.0)
+    assert BASE.bottom_clearance_timeout_s == pytest.approx(15.0)
     assert BASE.perception_hold_timeout_s == pytest.approx(1.0)
     assert BASE.perception_abort_timeout_s == pytest.approx(5.0)
     assert BASE.tracking_command_hold_s == pytest.approx(0.20)
@@ -198,6 +232,35 @@ def test_bottom_detection_parameters_must_not_make_confirmation_impossible() -> 
         )
 
 
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        (
+            {
+                "bottom_clearance_m": 0.10,
+                "bottom_clearance_tolerance_m": 0.10,
+            },
+            "离底深度容差",
+        ),
+        ({"bottom_clearance_m": 0.04}, "离底距离"),
+        ({"bottom_clearance_m": 0.21}, "离底距离"),
+        (
+            {
+                "bottom_clearance_settle_s": 15.0,
+                "bottom_clearance_timeout_s": 15.0,
+            },
+            "离底稳定时间",
+        ),
+        ({"bottom_clearance_up_command": 1.01}, "归一化运动指令"),
+    ),
+)
+def test_bottom_clearance_parameters_are_bounded(
+    changes: dict[str, float], message: str
+) -> None:
+    with pytest.raises(SearchTestError, match=message):
+        replace(BASE, **changes)
+
+
 def test_start_uses_operator_power_without_requesting_target_depth() -> None:
     mission = SearchApproachMission(FAST, ("echinus",))
     decision = mission.start(
@@ -238,7 +301,7 @@ def test_descent_matches_fixed_keyboard_down_command() -> None:
     assert near.motion.vertical == pytest.approx(-0.60)
 
 
-def test_depth_plateau_records_bottom_and_enters_scan_neutral() -> None:
+def test_depth_plateau_records_bottom_without_scanning_on_the_bottom() -> None:
     mission = SearchApproachMission(FAST, ("echinus",))
     mission.start(
         observation(0, depth=0.20),
@@ -249,10 +312,12 @@ def test_depth_plateau_records_bottom_and_enters_scan_neutral() -> None:
     assert moving.state == SearchTestState.DESCENDING
     assert moving.motion.vertical == pytest.approx(-0.60)
     decision = mission.step(observation(2, depth=0.50), 0.12)
-    assert decision.state == SearchTestState.SCANNING
+    assert decision.state == SearchTestState.CLEARING_BOTTOM
     assert decision.motion.is_neutral()
-    assert decision.target_depth_m == pytest.approx(0.50)
+    assert mission.bottom_depth_m == pytest.approx(0.50)
+    assert decision.target_depth_m == pytest.approx(0.40)
     assert "触底" in decision.message
+    assert "上浮" in decision.message
 
 
 def test_suspected_bottom_neutralizes_before_full_confirmation() -> None:
@@ -272,8 +337,105 @@ def test_suspected_bottom_neutralizes_before_full_confirmation() -> None:
     assert holding.motion.is_neutral()
     assert "ALT_HOLD 定深确认" in holding.message
     confirmed = mission.step(observation(3, depth=0.60), 3.11)
-    assert confirmed.state == SearchTestState.SCANNING
+    assert confirmed.state == SearchTestState.CLEARING_BOTTOM
     assert confirmed.motion.is_neutral()
+
+
+def test_clearing_bottom_uses_dedicated_point_four_up_command() -> None:
+    mission = started()
+    frame, now = reach_clearance(mission)
+    assert mission.target_depth_m == pytest.approx(1.20)
+
+    decision = mission.step(
+        observation(frame + 1, depth=1.25),
+        now + 0.01,
+    )
+
+    assert decision.state == SearchTestState.CLEARING_BOTTOM
+    assert decision.motion.vertical == pytest.approx(0.40)
+    assert decision.motion.forward == pytest.approx(0.0)
+    assert decision.motion.lateral == pytest.approx(0.0)
+    assert decision.motion.yaw == pytest.approx(0.0)
+
+
+def test_clearing_bottom_neutralizes_at_target_and_scans_after_settle() -> None:
+    config = replace(FAST, bottom_clearance_settle_s=0.20)
+    mission = started(config)
+    frame, now = reach_clearance(mission)
+    assert mission.target_depth_m == pytest.approx(1.20)
+
+    arrived = mission.step(observation(frame + 1, depth=1.20), now + 0.01)
+    assert arrived.state == SearchTestState.CLEARING_BOTTOM
+    assert arrived.motion.is_neutral()
+
+    waiting = mission.step(observation(frame + 2, depth=1.20), now + 0.19)
+    assert waiting.state == SearchTestState.CLEARING_BOTTOM
+    assert waiting.motion.is_neutral()
+
+    scanning = mission.step(observation(frame + 3, depth=1.20), now + 0.22)
+    assert scanning.state == SearchTestState.SCANNING
+    assert scanning.motion.is_neutral()
+    assert mission.search_cycle == 1
+
+
+def test_clearing_bottom_overshoot_never_commands_descent() -> None:
+    mission = started()
+    frame, now = reach_clearance(mission)
+
+    overshot = mission.step(
+        observation(frame + 1, depth=1.15),
+        now + 0.01,
+    )
+
+    assert overshot.state == SearchTestState.CLEARING_BOTTOM
+    assert overshot.motion.is_neutral()
+    assert overshot.motion.vertical >= 0.0
+
+
+def test_clearing_bottom_deeper_drift_resets_settle_timer() -> None:
+    config = replace(FAST, bottom_clearance_settle_s=0.20)
+    mission = started(config)
+    frame, now = reach_clearance(mission)
+
+    mission.step(observation(frame + 1, depth=1.20), now + 0.01)
+    waiting = mission.step(observation(frame + 2, depth=1.20), now + 0.15)
+    assert waiting.state == SearchTestState.CLEARING_BOTTOM
+    assert mission.settled_since == pytest.approx(now + 0.01)
+
+    drifted = mission.step(observation(frame + 3, depth=1.23), now + 0.16)
+    assert drifted.state == SearchTestState.CLEARING_BOTTOM
+    assert drifted.motion.vertical == pytest.approx(0.40)
+    assert mission.settled_since is None
+
+    returned = mission.step(observation(frame + 4, depth=1.20), now + 0.17)
+    assert returned.state == SearchTestState.CLEARING_BOTTOM
+    assert returned.motion.is_neutral()
+    not_yet_stable = mission.step(
+        observation(frame + 5, depth=1.20),
+        now + 0.35,
+    )
+    assert not_yet_stable.state == SearchTestState.CLEARING_BOTTOM
+    stable = mission.step(observation(frame + 6, depth=1.20), now + 0.38)
+    assert stable.state == SearchTestState.SCANNING
+
+
+def test_clearing_bottom_timeout_aborts_neutral() -> None:
+    config = replace(
+        FAST,
+        bottom_clearance_settle_s=0.05,
+        bottom_clearance_timeout_s=0.20,
+    )
+    mission = started(config)
+    frame, now = reach_clearance(mission)
+
+    decision = mission.step(
+        observation(frame + 1, depth=1.25),
+        now + config.bottom_clearance_timeout_s + 0.01,
+    )
+
+    assert decision.state == SearchTestState.ABORTED
+    assert decision.motion.is_neutral()
+    assert "离底上浮超时" in decision.message
 
 
 def test_state_reporter_prints_entry_one_hz_countdown_and_transition() -> None:
@@ -302,14 +464,38 @@ def test_state_reporter_prints_entry_one_hz_countdown_and_transition() -> None:
     three_index = next(
         index for index, item in enumerate(messages) if "疑似触底稳定=3/3s" in item
     )
-    transition_index = next(
+    clearance_transition_index = next(
         index
         for index, item in enumerate(messages)
-        if "[状态切换] DESCENDING -> SCANNING" in item
+        if "[状态切换] DESCENDING -> CLEARING_BOTTOM" in item
     )
-    assert three_index < transition_index
+    assert three_index < clearance_transition_index
+    assert any(item.startswith("[进入状态] CLEARING_BOTTOM") for item in messages)
+
+    # 触底后必须先主动离底，再由 ALT_HOLD 在悬空深度稳定，不能
+    # 继续把池底本身作为扫描定深目标。
+    target_depth_m = mission.target_depth_m
+    assert target_depth_m == pytest.approx(0.50)
+    current = observation(5, depth=target_depth_m)
+    decision = mission.step(current, 3.12)
+    reporter.report(decision, current, 3.12)
+    current = observation(6, depth=target_depth_m)
+    decision = mission.step(
+        current,
+        3.12 + config.bottom_clearance_settle_s + 0.01,
+    )
+    reporter.report(
+        decision,
+        current,
+        3.12 + config.bottom_clearance_settle_s + 0.01,
+    )
+
+    assert any(
+        "[状态切换] CLEARING_BOTTOM -> SCANNING" in item
+        for item in messages
+    )
     assert any(item.startswith("[进入状态] SCANNING") for item in messages)
-    assert any("由 ALT_HOLD 定深完成确认" in item for item in messages)
+    assert any("稳定定深" in item for item in messages)
 
 
 def test_every_search_state_has_a_terminal_display_name() -> None:
@@ -357,7 +543,7 @@ def test_bottom_detection_accepts_small_pressure_noise() -> None:
     mission.step(observation(1, depth=0.60), 0.01)
     mission.step(observation(2, depth=0.61), 0.11)
     decision = mission.step(observation(3, depth=0.60), 0.22)
-    assert decision.state == SearchTestState.SCANNING
+    assert decision.state == SearchTestState.CLEARING_BOTTOM
     assert decision.motion.is_neutral()
 
 
@@ -368,7 +554,7 @@ def test_default_bottom_tolerance_accepts_float32_five_centimeter_span() -> None
     mission.step(observation(1, depth=0.600000024), 0.01)
     mission.step(observation(2, depth=0.649999976), 0.11)
     decision = mission.step(observation(3, depth=0.610000014), 0.22)
-    assert decision.state == SearchTestState.SCANNING
+    assert decision.state == SearchTestState.CLEARING_BOTTOM
     assert decision.motion.is_neutral()
 
 
@@ -390,7 +576,7 @@ def test_pause_time_does_not_count_towards_three_second_bottom_window() -> None:
     assert resumed.motion.vertical == pytest.approx(-0.60)
 
     confirmed = mission.step(observation(3, depth=0.60), 13.11)
-    assert confirmed.state == SearchTestState.SCANNING
+    assert confirmed.state == SearchTestState.CLEARING_BOTTOM
     assert confirmed.motion.is_neutral()
 
 
@@ -945,8 +1131,13 @@ def test_manual_rescan_returns_to_search_depth_before_new_scan() -> None:
     assert decision.motion.is_neutral()
     returning = mission.step(observation(frame + 2, depth=1.45), now + 0.10)
     assert returning.motion.vertical > 0.0
-    mission.step(observation(frame + 3, depth=1.30), now + 0.15)
-    restarted = mission.step(observation(frame + 4, depth=1.30), now + 0.30)
+    assert mission.target_depth_m is not None
+    mission.step(
+        observation(frame + 3, depth=mission.target_depth_m), now + 0.15
+    )
+    restarted = mission.step(
+        observation(frame + 4, depth=mission.target_depth_m), now + 0.30
+    )
     assert restarted.state == SearchTestState.SCANNING
     assert restarted.motion.is_neutral()
 

@@ -31,6 +31,7 @@ class SearchTestState(str, Enum):
 
     IDLE = "idle"
     DESCENDING = "descending"
+    CLEARING_BOTTOM = "clearing_bottom"
     SCANNING = "scanning"
     ADVANCING = "advancing"
     ALIGNING = "aligning"
@@ -67,6 +68,13 @@ class SearchApproachConfig:
     # 达到该时间后立即把升沉回中，由 ALT_HOLD 定深完成剩余确认，
     # 避免在完整 3 秒确认窗口内一直向池底施力。
     bottom_neutral_confirmation_s: float = 1.0
+    # 确认触底后不直接在池底定深扫描。先上浮一个可调间隙，
+    # 减小艇体压底产生的法向力和水平旋转摩擦。
+    bottom_clearance_m: float = 0.10
+    bottom_clearance_tolerance_m: float = 0.02
+    bottom_clearance_up_command: float = 0.40
+    bottom_clearance_settle_s: float = 1.0
+    bottom_clearance_timeout_s: float = 15.0
     descent_tolerance_m: float = 0.05
     descent_gain: float = 0.8
     descent_minimum_command: float = 0.10
@@ -144,6 +152,11 @@ class SearchApproachConfig:
             self.bottom_detection_depth_tolerance_m,
             self.bottom_detection_minimum_descent_m,
             self.bottom_neutral_confirmation_s,
+            self.bottom_clearance_m,
+            self.bottom_clearance_tolerance_m,
+            self.bottom_clearance_up_command,
+            self.bottom_clearance_settle_s,
+            self.bottom_clearance_timeout_s,
             self.descent_tolerance_m,
             self.descent_gain,
             self.descent_minimum_command,
@@ -201,6 +214,12 @@ class SearchApproachConfig:
             raise SearchTestError("触底稳定时间必须小于下潜超时")
         if self.bottom_neutral_confirmation_s >= self.bottom_detection_stable_s:
             raise SearchTestError("触底回中确认时间必须小于完整触底稳定时间")
+        if self.bottom_clearance_tolerance_m >= self.bottom_clearance_m:
+            raise SearchTestError("离底深度容差必须小于离底距离")
+        if not 0.05 <= self.bottom_clearance_m <= 0.20:
+            raise SearchTestError("离底距离必须在 0.05..0.20 m")
+        if self.bottom_clearance_settle_s >= self.bottom_clearance_timeout_s:
+            raise SearchTestError("离底稳定时间必须小于离底超时")
         if self.scan_report_step_deg > self.scan_angle_deg:
             raise SearchTestError("扫描进度提示步长不能大于扫描总角度")
         if self.alignment_loss_grace_s >= self.loss_confirmation_s:
@@ -209,6 +228,7 @@ class SearchApproachConfig:
             raise SearchTestError("回收最小指令不能大于最大指令")
         commands = (
             self.descent_minimum_command,
+            self.bottom_clearance_up_command,
             self.scan_yaw_command,
             self.advance_forward_command,
             self.minimum_yaw_command,
@@ -275,6 +295,7 @@ class SearchApproachConfig:
 
         required = max(
             self.advance_forward_command,
+            self.bottom_clearance_up_command,
             self.scan_yaw_command,
             self.far_forward_command,
             self.maximum_yaw_command,
@@ -366,6 +387,7 @@ class SearchTestDecision:
 STATE_DISPLAY_NAMES = {
     SearchTestState.IDLE: "等待启动",
     SearchTestState.DESCENDING: "下潜探底",
+    SearchTestState.CLEARING_BOTTOM: "离底上浮并定深",
     SearchTestState.SCANNING: "360°扫描",
     SearchTestState.ADVANCING: "无目标前进",
     SearchTestState.ALIGNING: "偏航对准",
@@ -417,7 +439,7 @@ class SearchStateReporter:
         if state_changed:
             if (
                 self._last_state == SearchTestState.DESCENDING
-                and decision.state == SearchTestState.SCANNING
+                and decision.state == SearchTestState.CLEARING_BOTTOM
             ):
                 self._emit(
                     "[状态进度] DESCENDING | "
@@ -502,6 +524,15 @@ class SearchStateReporter:
     ) -> str:
         if decision.state == SearchTestState.DESCENDING:
             return f"power={self._mission.descent_command:.2f}"
+        if decision.state == SearchTestState.CLEARING_BOTTOM:
+            bottom = self._mission.bottom_depth_m
+            target = self._mission.target_depth_m
+            return (
+                f"池底={'--' if bottom is None else f'{bottom:.2f}m'}，"
+                f"离底={self._mission.config.bottom_clearance_m:.2f}m，"
+                f"目标={'--' if target is None else f'{target:.2f}m'}，"
+                f"up_power=+{self._mission.config.bottom_clearance_up_command:.2f}"
+            )
         if decision.state == SearchTestState.SCANNING:
             return (
                 f"连续右转 yaw_power={self._mission.config.scan_yaw_command:.2f}，"
@@ -541,6 +572,26 @@ class SearchStateReporter:
                 f"疑似触底稳定={int(stable + 1e-6)}/"
                 f"{int(self._mission.config.bottom_detection_stable_s)}s | "
                 f"深度波动={self._mission.bottom_depth_span_m:.3f}m"
+            )
+        if state == SearchTestState.CLEARING_BOTTOM:
+            target = self._mission.target_depth_m
+            bottom = self._mission.bottom_depth_m
+            lifted = (
+                0.0
+                if bottom is None
+                else max(0.0, bottom - observation.depth_m)
+            )
+            settled = (
+                0.0
+                if self._mission.settled_since is None
+                else max(0.0, now - self._mission.settled_since)
+            )
+            return (
+                f"深度={observation.depth_m:.2f}m | "
+                f"目标={'--' if target is None else f'{target:.2f}m'} | "
+                f"已离底={lifted:.2f}/{self._mission.config.bottom_clearance_m:.2f}m | "
+                f"稳定={settled:.1f}/{self._mission.config.bottom_clearance_settle_s:.1f}s | "
+                f"vertical={decision.motion.vertical:+.2f}"
             )
         if state == SearchTestState.SCANNING:
             return (
@@ -642,6 +693,7 @@ class SearchApproachMission:
         self.workflow = SearchWorkflow(workflow)
         self.state = SearchTestState.IDLE
         self.start_depth_m: float | None = None
+        self.bottom_depth_m: float | None = None
         self.target_depth_m: float | None = None
         self.descent_command = 0.20
         self.descent_depth_history: deque[tuple[float, float]] = deque()
@@ -649,6 +701,7 @@ class SearchApproachMission:
         self.bottom_depth_span_m = 0.0
         self.state_started_at = 0.0
         self.settled_since: float | None = None
+        self.clearance_settle_reference_depth_m: float | None = None
         self.search_cycle = 0
         self.scan_progress_deg = 0.0
         self.previous_yaw_deg: float | None = None
@@ -692,13 +745,16 @@ class SearchApproachMission:
             )
         self.start_depth_m = float(observation.depth_m)
         # 触底前不存在人工设定的目标深度。确认深度平台后，
-        # target_depth_m 才会被记为本轮搜索深度，供 R 重搜使用。
+        # bottom_depth_m 记录池底，target_depth_m 记录离底后的
+        # 本轮搜索深度，供扫描和 R 重搜使用。
+        self.bottom_depth_m = None
         self.target_depth_m = None
         self.descent_command = float(descent_command)
         self.descent_depth_history.clear()
         self.descent_depth_history.append((float(now), float(observation.depth_m)))
         self.bottom_stable_duration_s = 0.0
         self.bottom_depth_span_m = 0.0
+        self.clearance_settle_reference_depth_m = None
         self.outcome = "running"
         self.last_frame_id = observation.frame_id
         self.last_new_frame_at = float(now)
@@ -793,6 +849,8 @@ class SearchApproachMission:
 
         if self.state == SearchTestState.DESCENDING:
             return self._step_descending(observation, now)
+        if self.state == SearchTestState.CLEARING_BOTTOM:
+            return self._step_clearing_bottom(observation, now)
         if self.state == SearchTestState.RETURNING:
             return self._step_returning(observation, now)
         if self.state == SearchTestState.RESETTING_FOR_RESCAN:
@@ -956,15 +1014,20 @@ class SearchApproachMission:
                 bottom_depth_m = (
                     sorted_depths[middle - 1] + sorted_depths[middle]
                 ) / 2.0
-            self.target_depth_m = float(bottom_depth_m)
-            self.search_cycle = 1
-            self._enter(SearchTestState.SCANNING, observation, now)
+            self.bottom_depth_m = float(bottom_depth_m)
+            # 深度以向下为正，因此离底目标是池底深度减去间隙。
+            # 不让这个阶段浮到本次启动深度之上。
+            self.target_depth_m = max(
+                float(self.start_depth_m),
+                float(bottom_depth_m) - self.config.bottom_clearance_m,
+            )
+            self._enter(SearchTestState.CLEARING_BOTTOM, observation, now)
             return self._decision(
                 MotionCommand.neutral(),
                 observation,
                 f"深度连续 {self.config.bottom_detection_stable_s:.1f}s "
                 f"无明显变化，记录疑似触底 {bottom_depth_m:.2f} m，"
-                "开始向右扫描",
+                f"先上浮 {bottom_depth_m - self.target_depth_m:.2f} m 解除压底",
             )
 
         # 与键盘工具按住“↓”一致地下潜，直到在持续推力下观察到
@@ -991,6 +1054,66 @@ class SearchApproachMission:
             f"稳定 {self.bottom_stable_duration_s:.1f}/{self.config.bottom_detection_stable_s:.1f}s，"
             f"变化 {depth_span_m:.3f}/{self.config.bottom_detection_depth_tolerance_m:.3f}m，"
             + ("ALT_HOLD 定深确认" if hold_depth else "继续下潜"),
+        )
+
+    def _step_clearing_bottom(
+        self, observation: MissionObservation, now: float
+    ) -> SearchTestDecision:
+        """触底后上浮一个小间隙，稳定定深后再开始扫描。
+
+        这个阶段只允许上浮或回中，即使超调到目标深度之上，
+        也不会为了追准数值再次下潜压向池底。
+        """
+
+        if self.bottom_depth_m is None or self.target_depth_m is None:
+            return self.abort("离底基准深度缺失", observation)
+        if now - self.state_started_at >= self.config.bottom_clearance_timeout_s:
+            return self.abort("触底后离底上浮超时", observation)
+        if (
+            observation.depth_m - self.bottom_depth_m
+            > self.config.bottom_detection_depth_tolerance_m + 1e-6
+        ):
+            return self.abort("离底时深度反而增大，拒绝继续施力", observation)
+
+        error = observation.depth_m - self.target_depth_m
+        if error <= self.config.bottom_clearance_tolerance_m:
+            if self.settled_since is None:
+                self.settled_since = now
+                self.clearance_settle_reference_depth_m = observation.depth_m
+            elif (
+                self.clearance_settle_reference_depth_m is None
+                or abs(
+                    observation.depth_m - self.clearance_settle_reference_depth_m
+                )
+                > self.config.bottom_clearance_tolerance_m
+            ):
+                # 虽然已穿过目标深度，但艇仍在明显上浮时
+                # 不能立即开始转圈；重新计时等待深度稳定。
+                self.settled_since = now
+                self.clearance_settle_reference_depth_m = observation.depth_m
+            if now - self.settled_since >= self.config.bottom_clearance_settle_s:
+                self.search_cycle = 1
+                self._enter(SearchTestState.SCANNING, observation, now)
+                return self._decision(
+                    MotionCommand.neutral(),
+                    observation,
+                    f"已离底 {max(0.0, self.bottom_depth_m - observation.depth_m):.2f} m "
+                    "并稳定定深，开始向右扫描",
+                )
+            return self._decision(
+                MotionCommand.neutral(),
+                observation,
+                f"已到离底目标 {self.target_depth_m:.2f} m，"
+                "升沉回中等待 ALT_HOLD 稳定",
+            )
+
+        self.settled_since = None
+        self.clearance_settle_reference_depth_m = None
+        return self._decision(
+            MotionCommand(vertical=self.config.bottom_clearance_up_command),
+            observation,
+            f"触底后上浮离底：{observation.depth_m:.2f} -> "
+            f"{self.target_depth_m:.2f} m",
         )
 
     def _step_scanning(
@@ -1411,6 +1534,7 @@ class SearchApproachMission:
         self.state = state
         self.state_started_at = now
         self.settled_since = None
+        self.clearance_settle_reference_depth_m = None
         if state == SearchTestState.SCANNING:
             self.scan_progress_deg = 0.0
             self.previous_yaw_deg = observation.yaw_deg
