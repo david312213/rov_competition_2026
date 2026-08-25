@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import sys
@@ -31,6 +32,68 @@ from .vehicle import (
 
 class GripperTestError(RuntimeError):
     """候选机械爪档案不能安全测试。"""
+
+
+# 这两份数据是从旧大连工程和 RST 工程提取出来的“待实船验证”档案。
+# 本模块保留一份纯 Python 常量，是为了让安装后的 ROS 命令也能兼容队员
+# 已经在使用的旧版 robot.yaml，而不依赖源码目录中的示例文件。它们不是
+# “已标定参数”：只有真实开爪和闭爪都由操作员确认后，总向导才会
+# 允许把对应档案写入已备份的实艇配置。
+_CANDIDATE_GRIPPER_PROFILES: dict[str, dict[str, object]] = {
+    "dalian": {
+        "calibrated": False,
+        "allow_extended_pwm": False,
+        "step_interval_s": 0.125,
+        "outputs": [
+            {
+                "output_channel": 12,
+                "open": {
+                    "start_pwm": 1775,
+                    "end_pwm": 1900,
+                    "step_pwm": 25,
+                },
+                "close": {
+                    "start_pwm": 1900,
+                    "end_pwm": 1625,
+                    "step_pwm": -25,
+                },
+            }
+        ],
+    },
+    "rst": {
+        "calibrated": False,
+        "allow_extended_pwm": False,
+        "step_interval_s": 0.125,
+        "outputs": [
+            {
+                "output_channel": 11,
+                "open": {
+                    "start_pwm": 950,
+                    "end_pwm": 950,
+                    "step_pwm": 25,
+                },
+                "close": {
+                    "start_pwm": 1450,
+                    "end_pwm": 1450,
+                    "step_pwm": 25,
+                },
+            },
+            {
+                "output_channel": 10,
+                "open": {
+                    "start_pwm": 1050,
+                    "end_pwm": 1050,
+                    "step_pwm": 25,
+                },
+                "close": {
+                    "start_pwm": 500,
+                    "end_pwm": 500,
+                    "step_pwm": -25,
+                },
+            },
+        ],
+    },
+}
 
 
 def _mapping(value: object, name: str) -> Mapping[str, Any]:
@@ -57,7 +120,22 @@ def write_candidate_config(
     content = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
     root = dict(_mapping(content, "robot.yaml"))
     gripper = dict(_mapping(root.get("gripper"), "gripper"))
-    profiles = _mapping(gripper.get("profiles"), "gripper.profiles")
+    raw_profiles = gripper.get("profiles")
+    if raw_profiles is None and "profiles" not in gripper:
+        # 0.2.0rc1 以前的实艇配置只有 output_channel/open_pwm/
+        # close_pwm。这些历史值不足以区分当前机械爪，所以不把它们
+        # 冒充为已标定档案；只在本次安全测试副本中注入两套候选。
+        profiles: Mapping[str, Any] = copy.deepcopy(
+            _CANDIDATE_GRIPPER_PROFILES
+        )
+        gripper = {
+            "active_profile": profile,
+            "profiles": profiles,
+        }
+    else:
+        # 已经使用新格式却把 profiles 写成 null/列表时，继续拒绝
+        # 启动；只自动迁移可明确识别的旧格式，不隐藏真实配置错误。
+        profiles = _mapping(raw_profiles, "gripper.profiles")
     if profile not in profiles:
         raise GripperTestError(
             f"机械爪档案 {profile!r} 不存在；可用: {', '.join(profiles)}"

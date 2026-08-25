@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from rov_competition.config import (
     ConfigurationError,
     ControlProfile,
@@ -300,3 +301,57 @@ def test_gripper_candidate_config_selects_profile_without_editing_source(
     assert config.allow_ros_arming is False
     assert config.allow_gripper_actuation is False
     assert ROBOT_EXAMPLE.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_steps"),
+    (
+        (
+            "dalian",
+            {
+                "open": tuple(((12, pwm),) for pwm in range(1775, 1925, 25)),
+                "close": tuple(((12, pwm),) for pwm in range(1900, 1600, -25)),
+            },
+        ),
+        (
+            "rst",
+            {
+                "open": (((11, 950), (10, 1050)),),
+                "close": (((11, 1450), (10, 500)),),
+            },
+        ),
+    ),
+)
+def test_gripper_candidate_config_migrates_legacy_copy_only(
+    tmp_path: Path,
+    profile: str,
+    expected_steps: dict[str, tuple[tuple[tuple[int, int], ...], ...]],
+) -> None:
+    """旧实艇配置应能测两种候选，但只能迁移临时安全副本。"""
+
+    source = ROBOT_EXAMPLE.read_text(encoding="utf-8")
+    start = source.index("gripper:\n")
+    end = source.index("\ndepth:\n", start)
+    legacy = source[:start] + (
+        "gripper:\n"
+        "  output_channel: 12\n"
+        "  open_pwm: 1650\n"
+        "  close_pwm: 1900\n"
+    ) + source[end + 1 :]
+    source_path = tmp_path / "robot.yaml"
+    source_path.write_text(legacy, encoding="utf-8")
+    original = source_path.read_bytes()
+    destination = tmp_path / f"resolved_{profile}.yaml"
+
+    config = write_candidate_config(source_path, profile, destination)
+
+    assert source_path.read_bytes() == original
+    assert config.gripper.profile == profile
+    assert config.gripper.steps_for("open") == expected_steps["open"]
+    assert config.gripper.steps_for("close") == expected_steps["close"]
+    assert config.allow_live_actuation is False
+    assert config.allow_ros_arming is False
+    assert config.allow_gripper_actuation is False
+    resolved = yaml.safe_load(destination.read_text(encoding="utf-8"))
+    assert set(resolved["gripper"]["profiles"]) == {"dalian", "rst"}
+    assert "output_channel" not in resolved["gripper"]
