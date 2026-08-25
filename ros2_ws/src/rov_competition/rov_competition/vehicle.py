@@ -463,6 +463,11 @@ class MavlinkVehicle:
         if not self.connected:
             raise VehicleError("尚未连接飞控")
         self._require_preflight()
+        # 预检后会等待操作员阅读安全提示并按 Enter。等待期间该命令
+        # 没有后台 ROS 定时器读取 MAVLink，因此内存中的心跳时间戳可能
+        # 过期，即使 UDP 接收队列里已经有新心跳。发送任何爪子指令前
+        # 先非阻塞吸收最新遥测，然后再依据新状态检查心跳和上锁。
+        self.poll_telemetry()
         self._require_fresh_heartbeat()
         if self._telemetry.armed is not False:
             raise VehicleError("飞控必须明确上锁，拒绝机械爪候选测试")

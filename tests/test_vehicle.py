@@ -576,6 +576,30 @@ def test_disarmed_dalian_candidate_test_waits_for_every_ack() -> None:
     )
 
 
+def test_disarmed_gripper_refreshes_heartbeat_after_operator_pause() -> None:
+    """人工确认用时较长时，发送前必须处理 UDP 队列中的新心跳。"""
+
+    vehicle, master = make_vehicle(live=False)
+    vehicle._preflight_report = passed_report(include_gripper_checks=True)
+    vehicle._telemetry.last_heartbeat_monotonic = (
+        time.monotonic() - vehicle.config.heartbeat_stale_timeout_s - 1.0
+    )
+    # 模拟操作员看完提示后，新心跳已到达内核 UDP 队列，
+    # 但候选测试命令尚未调用 poll_telemetry 处理它。
+    master.messages.append(heartbeat(armed=False))
+    master.acknowledge_servo = True
+
+    records = vehicle.run_disarmed_gripper_test(
+        GripperAction.OPEN,
+        confirmation=GRIPPER_TEST_CONFIRMATION,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert records
+    assert vehicle.current_telemetry().armed is False
+    assert vehicle.heartbeat_is_fresh()
+
+
 def test_disarmed_gripper_candidate_rejects_armed_or_missing_preflight() -> None:
     """软件配置门关闭并不够；飞控上锁和输出检查缺一不可。"""
 
