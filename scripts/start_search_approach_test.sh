@@ -40,7 +40,7 @@ usage() {
     '' \
     'auto_approach：自动下潜、扫描、对准、接近，然后回收。' \
     'manual_grasp_calibration：自动对准后停车，进入 WASD 抓取位置标定。' \
-    '两个模式都会在解锁前询问相对下潜距离、下潜 power 和确认词。'
+    '两个模式都会在解锁前询问下潜 power 和确认词；深度连续稳定 3 秒后自动进入扫描。'
 }
 while (($# > 0)); do
   case "$1" in

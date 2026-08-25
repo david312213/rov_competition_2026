@@ -21,6 +21,7 @@ PACKAGE = Path(__file__).resolve().parents[1] / "ros2_ws/src/rov_competition"
 BASE = load_search_approach_config(PACKAGE / "config/search_test.yaml")
 FAST = replace(
     BASE,
+    bottom_detection_stable_s=0.10,
     descent_settle_s=0.10,
     return_settle_s=0.10,
     alignment_frames=2,
@@ -77,7 +78,6 @@ def started(
     )
     mission.start(
         observation(0, depth=1.0),
-        relative_descent_m=0.30,
         descent_command=0.20,
         now=0.0,
     )
@@ -108,6 +108,9 @@ def lock_and_approach(mission: SearchApproachMission) -> tuple[int, float, Detec
 
 
 def test_config_matches_rc2_pool_parameters() -> None:
+    assert BASE.bottom_detection_stable_s == pytest.approx(3.0)
+    assert BASE.bottom_detection_depth_tolerance_m == pytest.approx(0.02)
+    assert BASE.bottom_detection_minimum_descent_m == pytest.approx(0.10)
     assert BASE.perception_hold_timeout_s == pytest.approx(0.50)
     assert BASE.perception_abort_timeout_s == pytest.approx(3.0)
     assert BASE.scan_yaw_command == pytest.approx(0.20)
@@ -127,16 +130,30 @@ def test_perception_abort_timeout_must_follow_hold_timeout() -> None:
         )
 
 
-def test_start_uses_operator_relative_depth_and_power() -> None:
+def test_bottom_detection_parameters_must_not_make_confirmation_impossible() -> None:
+    with pytest.raises(SearchTestError, match="变化容差"):
+        replace(
+            BASE,
+            bottom_detection_depth_tolerance_m=0.10,
+            bottom_detection_minimum_descent_m=0.10,
+        )
+    with pytest.raises(SearchTestError, match="稳定时间"):
+        replace(
+            BASE,
+            bottom_detection_stable_s=45.0,
+            descent_timeout_s=45.0,
+        )
+
+
+def test_start_uses_operator_power_without_requesting_target_depth() -> None:
     mission = SearchApproachMission(FAST, ("echinus",))
     decision = mission.start(
         observation(7, depth=0.20),
-        relative_descent_m=0.50,
         descent_command=0.60,
         now=1.0,
     )
     assert mission.start_depth_m == pytest.approx(0.20)
-    assert decision.target_depth_m == pytest.approx(0.70)
+    assert decision.target_depth_m is None
     assert mission.descent_command == pytest.approx(0.60)
     descent = mission.step(observation(8, depth=0.20), 1.05)
     assert descent.motion.vertical == pytest.approx(-0.60)
@@ -148,19 +165,17 @@ def test_invalid_descent_power_is_rejected(value: float) -> None:
     with pytest.raises(SearchTestError, match="power"):
         mission.start(
             observation(0),
-            relative_descent_m=0.30,
             descent_command=value,
             now=0.0,
         )
 
 
 def test_descent_matches_fixed_keyboard_down_command() -> None:
-    """达到目标容差前始终使用操作员输入的固定下潜值。"""
+    """触底判定完成前始终使用操作员输入的固定下潜值。"""
 
     mission = SearchApproachMission(FAST, ("echinus",))
     mission.start(
         observation(0, depth=0.20),
-        relative_descent_m=0.30,
         descent_command=0.60,
         now=0.0,
     )
@@ -170,17 +185,103 @@ def test_descent_matches_fixed_keyboard_down_command() -> None:
     assert near.motion.vertical == pytest.approx(-0.60)
 
 
-def test_descent_overshoot_stops_instead_of_reversing_at_full_power() -> None:
+def test_depth_plateau_records_bottom_and_enters_scan_neutral() -> None:
     mission = SearchApproachMission(FAST, ("echinus",))
     mission.start(
         observation(0, depth=0.20),
-        relative_descent_m=0.30,
         descent_command=0.60,
         now=0.0,
     )
-    decision = mission.step(observation(1, depth=0.57), 0.05)
-    assert decision.state == SearchTestState.DESCENDING
+    moving = mission.step(observation(1, depth=0.50), 0.01)
+    assert moving.state == SearchTestState.DESCENDING
+    assert moving.motion.vertical == pytest.approx(-0.60)
+    decision = mission.step(observation(2, depth=0.50), 0.12)
+    assert decision.state == SearchTestState.SCANNING
     assert decision.motion.is_neutral()
+    assert decision.target_depth_m == pytest.approx(0.50)
+    assert "触底" in decision.message
+
+
+def test_depth_change_inside_full_window_does_not_false_trigger_bottom() -> None:
+    """不能因为相邻读数很小，就把持续慢速下潜当成池底。"""
+
+    config = replace(
+        FAST,
+        bottom_detection_stable_s=3.0,
+        bottom_detection_depth_tolerance_m=0.02,
+    )
+    mission = SearchApproachMission(config, ("echinus",))
+    mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
+    decision = None
+    for index in range(1, 8):
+        now = index * 0.5
+        decision = mission.step(
+            observation(index, depth=0.20 + index * 0.01), now
+        )
+    assert decision is not None
+    assert decision.state == SearchTestState.DESCENDING
+    assert decision.motion.vertical == pytest.approx(-0.60)
+
+
+def test_bottom_detection_requires_minimum_real_descent() -> None:
+    mission = SearchApproachMission(FAST, ("echinus",))
+    mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
+    decision = mission.step(observation(1, depth=0.20), 0.20)
+    assert decision.state == SearchTestState.DESCENDING
+    assert decision.motion.vertical == pytest.approx(-0.60)
+
+
+def test_bottom_detection_accepts_small_pressure_noise() -> None:
+    config = replace(
+        FAST,
+        bottom_detection_stable_s=0.20,
+        bottom_detection_depth_tolerance_m=0.02,
+    )
+    mission = SearchApproachMission(config, ("echinus",))
+    mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
+    mission.step(observation(1, depth=0.60), 0.01)
+    mission.step(observation(2, depth=0.61), 0.11)
+    decision = mission.step(observation(3, depth=0.60), 0.22)
+    assert decision.state == SearchTestState.SCANNING
+    assert decision.motion.is_neutral()
+
+
+def test_pause_time_does_not_count_towards_three_second_bottom_window() -> None:
+    config = replace(FAST, bottom_detection_stable_s=3.0)
+    mission = SearchApproachMission(config, ("echinus",))
+    mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
+    mission.step(observation(1, depth=0.60), 0.10)
+
+    # 窗口失焦或感知暂停时只发中位，这 10 秒不能偷偷算作
+    # “持续向下施力后深度稳定”的证据。
+    mission.delay_timers(10.0)
+    resumed = mission.step(observation(2, depth=0.60), 10.20)
+    assert resumed.state == SearchTestState.DESCENDING
+    assert resumed.motion.vertical == pytest.approx(-0.60)
+
+    confirmed = mission.step(observation(3, depth=0.60), 13.11)
+    assert confirmed.state == SearchTestState.SCANNING
+    assert confirmed.motion.is_neutral()
+
+
+def test_descent_aborts_at_hard_maximum_depth() -> None:
+    config = replace(FAST, maximum_operation_depth_m=0.70)
+    mission = SearchApproachMission(config, ("echinus",))
+    mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
+    decision = mission.step(observation(1, depth=0.70), 0.05)
+    assert decision.state == SearchTestState.ABORTED
+    assert decision.motion.is_neutral()
+    assert "作业上限" in decision.message
+
+
+def test_descent_timeout_aborts_if_no_bottom_plateau_is_confirmed() -> None:
+    config = replace(FAST, descent_timeout_s=0.20)
+    mission = SearchApproachMission(config, ("echinus",))
+    mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
+    decision = mission.step(observation(1, depth=0.40), 0.20)
+    assert decision.state == SearchTestState.ABORTED
+    assert decision.motion.is_neutral()
+    assert "超时" in decision.message
 
 
 def test_scan_accumulates_right_turn_across_north() -> None:

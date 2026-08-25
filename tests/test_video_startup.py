@@ -192,6 +192,16 @@ def test_search_runtime_reuses_safety_node_with_its_own_ros_name() -> None:
     assert 'node_name="rov_search_approach_test"' in search_source
 
 
+def test_search_runtime_asks_for_power_but_not_a_target_depth() -> None:
+    """现场启动不再询问深度，由深度平台自动触发扫描。"""
+
+    source = SEARCH_RUNTIME.read_text(encoding="utf-8")
+    assert '"下潜固定 power "' in source
+    assert "bottom_detection_stable_s" in source
+    assert "set_detected_bottom_depth" in source
+    assert "相对下潜距离（米）" not in source
+
+
 def test_manual_runtime_contains_all_stop_and_calibration_keys() -> None:
     """人工标定入口必须同时保留失焦回中、正常回收和急停路径。"""
 

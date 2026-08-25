@@ -56,6 +56,7 @@ from .grasp_calibration import (
 )
 from .search_approach import (
     ManualCalibrationControl,
+    SearchApproachConfig,
     SearchApproachMission,
     SearchTestDecision,
     SearchTestError,
@@ -214,10 +215,17 @@ class SearchSessionLogger:
             "search_config_sha256": _sha256(search_config),
             "autonomy_config": str(autonomy_config),
             "autonomy_config_sha256": _sha256(autonomy_config),
+            "descent_mode": "depth_plateau_bottom_detection",
             "start_depth_m": None,
+            # 保留旧字段便于旧数据分析脚本读取；触底模式不再
+            # 使用人工输入的相对距离，因此它始终为 None。
             "relative_descent_m": None,
             "target_depth_m": None,
+            "detected_bottom_depth_m": None,
             "descent_command": None,
+            "bottom_detection_stable_s": None,
+            "bottom_detection_depth_tolerance_m": None,
+            "bottom_detection_minimum_descent_m": None,
             "end_depth_m": None,
             "video_file": None,
             "gripper_profile": gripper_profile,
@@ -229,16 +237,33 @@ class SearchSessionLogger:
         self,
         *,
         start_depth_m: float,
-        relative_descent_m: float,
-        target_depth_m: float,
         descent_command: float,
+        bottom_detection_stable_s: float,
+        bottom_detection_depth_tolerance_m: float,
+        bottom_detection_minimum_descent_m: float,
     ) -> None:
         self.metadata.update(
             {
                 "start_depth_m": start_depth_m,
-                "relative_descent_m": relative_descent_m,
-                "target_depth_m": target_depth_m,
                 "descent_command": descent_command,
+                "bottom_detection_stable_s": bottom_detection_stable_s,
+                "bottom_detection_depth_tolerance_m": (
+                    bottom_detection_depth_tolerance_m
+                ),
+                "bottom_detection_minimum_descent_m": (
+                    bottom_detection_minimum_descent_m
+                ),
+            }
+        )
+        self._write_metadata()
+
+    def set_detected_bottom_depth(self, depth_m: float) -> None:
+        """记录状态机实际判定的池底/本轮搜索深度。"""
+
+        self.metadata.update(
+            {
+                "target_depth_m": float(depth_m),
+                "detected_bottom_depth_m": float(depth_m),
             }
         )
         self._write_metadata()
@@ -662,10 +687,20 @@ def _draw_window(
         )
     else:
         lines.append("Automatic: descend -> scan -> align -> approach -> return")
+    if decision.target_depth_m is None:
+        depth_line = (
+            f"depth={decision.current_depth_m or 0.0:.2f} m  "
+            "search_depth=waiting for bottom"
+        )
+    else:
+        depth_line = (
+            f"depth={decision.current_depth_m or 0.0:.2f} m  "
+            f"search_depth={decision.target_depth_m:.2f} m"
+        )
     lines.extend(
         [
             f"state={decision.state.value}  cycle={decision.search_cycle}/3  paused={paused}",
-            f"depth={decision.current_depth_m or 0.0:.2f} m  target_depth={decision.target_depth_m or 0.0:.2f} m",
+            depth_line,
             f"frame_age={perception_age_s:.3f}s  target={target.label if target else 'none'}",
             operator_message[:120] if operator_message else decision.message[:120],
         ]
@@ -678,15 +713,14 @@ def _draw_window(
 
 def _interactive_parameters(
     node: SearchApproachNode,
-    maximum_depth_m: float,
+    search_config: SearchApproachConfig,
     robot_command_limit: float,
-) -> tuple[float, float, float, float]:
+) -> tuple[float, float]:
     if not sys.stdin.isatty():
         raise DatasetDriveError("真实测试必须在交互终端运行")
     observation = node.observation()
     if not observation.depth_valid or not math.isfinite(observation.depth_m):
         raise DatasetDriveError("启动前深度反馈无效")
-    relative = _prompt_float("相对下潜距离（米）", 0.30, 0.01, maximum_depth_m)
     descent_ceiling = min(0.80, robot_command_limit)
     descent_default = min(0.60, descent_ceiling)
     descent_power = _prompt_float(
@@ -696,24 +730,30 @@ def _interactive_parameters(
         descent_ceiling,
     )
     start_depth = observation.depth_m
-    target_depth = start_depth + relative
-    if target_depth > maximum_depth_m:
-        raise DatasetDriveError(
-            f"目标深度 {target_depth:.2f} m 超过配置上限 {maximum_depth_m:.2f} m"
-        )
     print("\n本次测试参数：")
     print(f"  启动深度：{start_depth:.2f} m")
-    print(f"  相对下潜：{relative:.2f} m")
-    print(f"  目标深度：{target_depth:.2f} m")
     print(f"  下潜固定 power：{descent_power:.2f}")
     print(
+        "  触底判定：深度连续 "
+        f"{search_config.bottom_detection_stable_s:.1f} s 的变化不超过 "
+        f"{search_config.bottom_detection_depth_tolerance_m:.2f} m"
+    )
+    print(
+        "  判定前至少观察下潜："
+        f"{search_config.bottom_detection_minimum_descent_m:.2f} m"
+    )
+    print(
+        f"  硬深度上限：{search_config.maximum_operation_depth_m:.2f} m"
+    )
+    print(
         "\n解锁前确认：ROV 已浸没、危险区无人、ALT_HOLD、"
-        "QGC 遥测和 5600 画面正常、QGC 可人工上锁、安全员可断电。"
+        "QGC 遥测和 5600 画面正常、QGC 可人工上锁、安全员可断电。\n"
+        "本流程会持续向下运动，直到深度平台被判定为触底。"
     )
     typed = input(f"全部满足后完整输入 {CONFIRMATION!r}: ").strip()
     if typed != CONFIRMATION:
         raise DatasetDriveError("确认词不匹配，未开启控制")
-    return relative, descent_power, start_depth, target_depth
+    return descent_power, start_depth
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -734,8 +774,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # dataset.yaml 在此只提供链路新鲜度和 ALT_HOLD 安全阈值。除下潜外
-    # 的固定测试动作最大为 0.40；固定下潜值由操作员现场输入，
-    # 并受 robot.yaml command_limit 二次限制。
+    # 的固定测试动作最大为 0.40；下潜 power 由操作员现场输入，
+    # 深度平台连续稳定 3s 后状态机自动记录触底深度。
     errors = list(
         search.readiness_errors(
             robot_command_limit=robot.command_limit,
@@ -849,9 +889,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         recorder.start()
         recorder.wait_until_receiving(timeout_s=10.0, pump=lambda: node.spin(0.0))
-        relative, descent_power, start_depth, target_depth = _interactive_parameters(
+        descent_power, start_depth = _interactive_parameters(
             node,
-            search.maximum_operation_depth_m,
+            search,
             robot.command_limit,
         )
         selected_power_errors = search.readiness_errors(
@@ -863,9 +903,14 @@ def main(argv: list[str] | None = None) -> int:
             raise DatasetDriveError("; ".join(selected_power_errors))
         logger.set_start_parameters(
             start_depth_m=start_depth,
-            relative_descent_m=relative,
-            target_depth_m=target_depth,
             descent_command=descent_power,
+            bottom_detection_stable_s=search.bottom_detection_stable_s,
+            bottom_detection_depth_tolerance_m=(
+                search.bottom_detection_depth_tolerance_m
+            ),
+            bottom_detection_minimum_descent_m=(
+                search.bottom_detection_minimum_descent_m
+            ),
         )
 
         for _ in range(5):
@@ -897,7 +942,6 @@ def main(argv: list[str] | None = None) -> int:
         observation = node.observation()
         decision = mission.start(
             observation,
-            relative_descent_m=relative,
             descent_command=descent_power,
             now=time.monotonic(),
         )
@@ -1172,6 +1216,12 @@ def main(argv: list[str] | None = None) -> int:
                 if not actual_motion.is_neutral():
                     last_manual_motion = actual_motion
             if last_state != decision.state:
+                if (
+                    last_state == SearchTestState.DESCENDING
+                    and decision.state == SearchTestState.SCANNING
+                    and decision.target_depth_m is not None
+                ):
+                    logger.set_detected_bottom_depth(decision.target_depth_m)
                 operator_message = decision.message
                 last_state = decision.state
 

@@ -55,6 +55,14 @@ class SearchApproachConfig:
     """水池测试中可验证的控制、跟踪和超时参数。"""
 
     maximum_operation_depth_m: float = 20.0
+    # 搜索测试不再使用人工输入的目标深度。持续下潜期间，
+    # 深度在 bottom_detection_depth_tolerance_m 范围内连续
+    # bottom_detection_stable_s 没有明显变化，才把当前深度记为池底。
+    bottom_detection_stable_s: float = 3.0
+    bottom_detection_depth_tolerance_m: float = 0.02
+    # 至少观察到一小段真实下潜，避免深度传感器从启动起
+    # 就卡死时，程序在水面误判“已触底”并开始旋转。
+    bottom_detection_minimum_descent_m: float = 0.10
     descent_tolerance_m: float = 0.05
     descent_gain: float = 0.8
     descent_minimum_command: float = 0.10
@@ -117,6 +125,9 @@ class SearchApproachConfig:
 
         positive = (
             self.maximum_operation_depth_m,
+            self.bottom_detection_stable_s,
+            self.bottom_detection_depth_tolerance_m,
+            self.bottom_detection_minimum_descent_m,
             self.descent_tolerance_m,
             self.descent_gain,
             self.descent_minimum_command,
@@ -159,6 +170,13 @@ class SearchApproachConfig:
             raise SearchTestError("搜索测试的数值参数必须是大于 0 的有限数")
         if self.perception_abort_timeout_s <= self.perception_hold_timeout_s:
             raise SearchTestError("感知中止时间必须大于回中等待时间")
+        if (
+            self.bottom_detection_depth_tolerance_m
+            >= self.bottom_detection_minimum_descent_m
+        ):
+            raise SearchTestError("触底深度变化容差必须小于最小实际下潜量")
+        if self.bottom_detection_stable_s >= self.descent_timeout_s:
+            raise SearchTestError("触底稳定时间必须小于下潜超时")
         commands = (
             self.descent_minimum_command,
             self.scan_yaw_command,
@@ -355,6 +373,7 @@ class SearchApproachMission:
         self.start_depth_m: float | None = None
         self.target_depth_m: float | None = None
         self.descent_command = 0.20
+        self.descent_depth_history: deque[tuple[float, float]] = deque()
         self.state_started_at = 0.0
         self.settled_since: float | None = None
         self.search_cycle = 0
@@ -377,36 +396,40 @@ class SearchApproachMission:
         self,
         observation: MissionObservation,
         *,
-        relative_descent_m: float,
         descent_command: float,
         now: float,
     ) -> SearchTestDecision:
-        """记录启动深度并进入相对下潜。"""
+        """记录启动深度，持续下潜并等待深度平台判定触底。"""
 
         if self.state not in {SearchTestState.IDLE, SearchTestState.COMPLETE}:
             raise SearchTestError("搜索测试已在运行")
         self._validate_observation(observation, require_perception=True)
-        if not math.isfinite(relative_descent_m) or relative_descent_m <= 0.0:
-            raise SearchTestError("相对下潜距离必须大于 0")
         if (
             not math.isfinite(descent_command)
             or not 0.10 <= descent_command <= 0.80
         ):
             raise SearchTestError("下潜 power 必须在 0.10..0.80")
-        target_depth = observation.depth_m + relative_descent_m
-        if target_depth > self.config.maximum_operation_depth_m:
+        if observation.depth_m >= self.config.maximum_operation_depth_m:
             raise SearchTestError(
-                f"目标深度 {target_depth:.2f} m 超过配置上限 "
+                f"启动深度 {observation.depth_m:.2f} m 已达到配置上限 "
                 f"{self.config.maximum_operation_depth_m:.2f} m"
             )
         self.start_depth_m = float(observation.depth_m)
-        self.target_depth_m = target_depth
+        # 触底前不存在人工设定的目标深度。确认深度平台后，
+        # target_depth_m 才会被记为本轮搜索深度，供 R 重搜使用。
+        self.target_depth_m = None
         self.descent_command = float(descent_command)
+        self.descent_depth_history.clear()
+        self.descent_depth_history.append((float(now), float(observation.depth_m)))
         self.outcome = "running"
         self.last_frame_id = observation.frame_id
         self._clear_target()
         self._enter(SearchTestState.DESCENDING, observation, now)
-        return self._decision(MotionCommand.neutral(), observation, "已记录启动深度，开始相对下潜")
+        return self._decision(
+            MotionCommand.neutral(),
+            observation,
+            "已记录启动深度，开始下潜并自动判定触底",
+        )
 
     def request_normal_finish(
         self, observation: MissionObservation, now: float, reason: str = "操作员正常结束"
@@ -460,6 +483,11 @@ class SearchApproachMission:
         self.state_started_at += paused_duration_s
         if self.settled_since is not None:
             self.settled_since += paused_duration_s
+        if self.descent_depth_history:
+            self.descent_depth_history = deque(
+                (sample_time + paused_duration_s, depth_m)
+                for sample_time, depth_m in self.descent_depth_history
+            )
         if self.last_target_seen_at is not None:
             self.last_target_seen_at += paused_duration_s
 
@@ -548,30 +576,84 @@ class SearchApproachMission:
     def _step_descending(
         self, observation: MissionObservation, now: float
     ) -> SearchTestDecision:
-        if self.target_depth_m is None:
-            return self.abort("下潜目标深度缺失", observation)
+        if (
+            self.start_depth_m is None
+            or not self.descent_depth_history
+        ):
+            return self.abort("触底判定基准缺失", observation)
         if now - self.state_started_at >= self.config.descent_timeout_s:
-            return self.abort("相对下潜超时", observation)
-        error = self.target_depth_m - observation.depth_m
-        # 达到目标或因惯性略微超过时立即回中，不用反向
-        # 大 power 反复修正。ALT_HOLD 会接管当前深度。
-        if error <= self.config.descent_tolerance_m:
-            if self.settled_since is None:
-                self.settled_since = now
-            if now - self.settled_since >= self.config.descent_settle_s:
-                self.search_cycle = 1
-                self._enter(SearchTestState.SCANNING, observation, now)
-                return self._decision(MotionCommand.neutral(), observation, "下潜完成，开始向右扫描")
-            return self._decision(MotionCommand.neutral(), observation, "进入深度容差，等待稳定")
-        self.settled_since = None
-        # 与键盘工具按住“↓”完全一致：到达深度容差前，
-        # 持续发送操作员输入的固定负向 vertical。不再在最后
-        # 0.20m 自动降功率，避免指令落入该艇的正浮力/死区。
+            return self.abort("下潜触底等待超时", observation)
+        if observation.depth_m >= self.config.maximum_operation_depth_m:
+            return self.abort(
+                f"深度 {observation.depth_m:.2f} m 已达到作业上限 "
+                f"{self.config.maximum_operation_depth_m:.2f} m",
+                observation,
+            )
+
+        # 保留覆盖最近 stable_s 的完整深度窗口。不能只比较相邻
+        # 两次读数：慢速下潜时，每次变化都很小，但 3 秒窗口的
+        # 总变化仍能证明艇在移动。
+        self.descent_depth_history.append((float(now), float(observation.depth_m)))
+        cutoff = now - self.config.bottom_detection_stable_s
+        while (
+            len(self.descent_depth_history) >= 2
+            and self.descent_depth_history[1][0] <= cutoff
+        ):
+            self.descent_depth_history.popleft()
+        window_duration_s = max(
+            0.0, now - self.descent_depth_history[0][0]
+        )
+        window_depths = [depth_m for _, depth_m in self.descent_depth_history]
+        depth_span_m = max(window_depths) - min(window_depths)
+        descended_m = observation.depth_m - self.start_depth_m
+        enough_descent = (
+            descended_m >= self.config.bottom_detection_minimum_descent_m
+        )
+        bottom_candidate = (
+            enough_descent
+            and window_duration_s >= self.config.bottom_detection_stable_s
+            and depth_span_m <= self.config.bottom_detection_depth_tolerance_m
+        )
+        if bottom_candidate:
+            # 记下实测触底深度。进入扫描前先回中，不让推进器
+            # 在状态切换的这一帧继续向池底施力。
+            sorted_depths = sorted(window_depths)
+            middle = len(sorted_depths) // 2
+            if len(sorted_depths) % 2:
+                bottom_depth_m = sorted_depths[middle]
+            else:
+                bottom_depth_m = (
+                    sorted_depths[middle - 1] + sorted_depths[middle]
+                ) / 2.0
+            self.target_depth_m = float(bottom_depth_m)
+            self.search_cycle = 1
+            self._enter(SearchTestState.SCANNING, observation, now)
+            return self._decision(
+                MotionCommand.neutral(),
+                observation,
+                f"深度连续 {self.config.bottom_detection_stable_s:.1f}s "
+                f"无明显变化，记录疑似触底 {bottom_depth_m:.2f} m，"
+                "开始向右扫描",
+            )
+
+        # 与键盘工具按住“↓”完全一致：触底判定完成前，
+        # 持续发送操作员输入的固定负向 vertical。现在不再追踪
+        # 人工目标深度，而是直到深度平台判定触底。
         vertical = -self.descent_command
+        progress_note = (
+            f"已下潜 {max(0.0, descended_m):.2f} m"
+            if enough_descent
+            else (
+                f"已下潜 {max(0.0, descended_m):.2f}/"
+                f"{self.config.bottom_detection_minimum_descent_m:.2f} m"
+            )
+        )
         return self._decision(
             MotionCommand(vertical=vertical),
             observation,
-            f"下潜 {observation.depth_m:.2f}/{self.target_depth_m:.2f} m",
+            f"下潜探底：深度 {observation.depth_m:.2f} m，{progress_note}，"
+            f"窗口 {window_duration_s:.1f}/{self.config.bottom_detection_stable_s:.1f}s，"
+            f"变化 {depth_span_m:.3f}/{self.config.bottom_detection_depth_tolerance_m:.3f}m",
         )
 
     def _step_scanning(
