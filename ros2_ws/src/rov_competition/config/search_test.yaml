@@ -11,6 +11,8 @@ search_test:
   bottom_detection_stable_s: 3.0
   bottom_detection_depth_tolerance_m: 0.05
   bottom_detection_minimum_descent_m: 0.10
+  # 在向下推力下稳定 1 秒即回中，之后由 ALT_HOLD 定深到完整 3 秒确认结束。
+  bottom_neutral_confirmation_s: 1.0
 
   # 下列参数仍用于人工标定中按 R 后回到本轮搜索深度。
   descent_tolerance_m: 0.05
@@ -25,9 +27,10 @@ search_test:
   perception_hold_timeout_s: 1.0
   perception_abort_timeout_s: 5.0
 
-  # 键2对应的向右偏航方向。
-  scan_yaw_command: 0.20
+  # 键2对应的向右偏航方向。这里是归一化 power，不是角度。
+  scan_yaw_command: 0.40
   scan_angle_deg: 360.0
+  scan_report_step_deg: 15.0
   scan_tolerance_deg: 3.0
   scan_timeout_s: 120.0
   maximum_yaw_step_deg: 45.0

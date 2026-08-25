@@ -24,6 +24,7 @@ BASE = load_search_approach_config(PACKAGE / "config/search_test.yaml")
 FAST = replace(
     BASE,
     bottom_detection_stable_s=0.10,
+    bottom_neutral_confirmation_s=0.05,
     descent_settle_s=0.10,
     return_settle_s=0.10,
     alignment_frames=2,
@@ -113,9 +114,11 @@ def test_config_matches_rc2_pool_parameters() -> None:
     assert BASE.bottom_detection_stable_s == pytest.approx(3.0)
     assert BASE.bottom_detection_depth_tolerance_m == pytest.approx(0.05)
     assert BASE.bottom_detection_minimum_descent_m == pytest.approx(0.10)
+    assert BASE.bottom_neutral_confirmation_s == pytest.approx(1.0)
     assert BASE.perception_hold_timeout_s == pytest.approx(1.0)
     assert BASE.perception_abort_timeout_s == pytest.approx(5.0)
-    assert BASE.scan_yaw_command == pytest.approx(0.20)
+    assert BASE.scan_yaw_command == pytest.approx(0.40)
+    assert BASE.scan_report_step_deg == pytest.approx(15.0)
     assert BASE.advance_forward_command == pytest.approx(0.40)
     assert BASE.advance_duration_s == pytest.approx(2.0)
     assert BASE.stop_area_ratio == pytest.approx(0.10)
@@ -146,6 +149,12 @@ def test_bottom_detection_parameters_must_not_make_confirmation_impossible() -> 
             BASE,
             bottom_detection_stable_s=45.0,
             descent_timeout_s=45.0,
+        )
+    with pytest.raises(SearchTestError, match="回中确认时间"):
+        replace(
+            BASE,
+            bottom_neutral_confirmation_s=3.0,
+            bottom_detection_stable_s=3.0,
         )
 
 
@@ -206,10 +215,35 @@ def test_depth_plateau_records_bottom_and_enters_scan_neutral() -> None:
     assert "触底" in decision.message
 
 
+def test_suspected_bottom_neutralizes_before_full_confirmation() -> None:
+    """疑似触底后不再持续压池底，由 ALT_HOLD 完成剩余确认。"""
+
+    config = replace(
+        BASE,
+        bottom_detection_stable_s=3.0,
+        bottom_neutral_confirmation_s=1.0,
+    )
+    mission = SearchApproachMission(config, ("echinus",))
+    mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
+    moving = mission.step(observation(1, depth=0.60), 0.10)
+    assert moving.motion.vertical == pytest.approx(-0.60)
+    holding = mission.step(observation(2, depth=0.60), 1.11)
+    assert holding.state == SearchTestState.DESCENDING
+    assert holding.motion.is_neutral()
+    assert "ALT_HOLD 定深确认" in holding.message
+    confirmed = mission.step(observation(3, depth=0.60), 3.11)
+    assert confirmed.state == SearchTestState.SCANNING
+    assert confirmed.motion.is_neutral()
+
+
 def test_state_reporter_prints_entry_one_hz_countdown_and_transition() -> None:
     """现场终端能看到进入状态、1/3、2/3、3/3 和状态切换。"""
 
-    config = replace(FAST, bottom_detection_stable_s=3.0)
+    config = replace(
+        FAST,
+        bottom_detection_stable_s=3.0,
+        bottom_neutral_confirmation_s=1.0,
+    )
     mission = SearchApproachMission(config, ("echinus",))
     first_observation = observation(0, depth=0.20)
     first = mission.start(first_observation, descent_command=0.60, now=0.0)
@@ -235,6 +269,7 @@ def test_state_reporter_prints_entry_one_hz_countdown_and_transition() -> None:
     )
     assert three_index < transition_index
     assert any(item.startswith("[进入状态] SCANNING") for item in messages)
+    assert any("由 ALT_HOLD 定深完成确认" in item for item in messages)
 
 
 def test_every_search_state_has_a_terminal_display_name() -> None:
@@ -247,6 +282,7 @@ def test_depth_change_inside_full_window_does_not_false_trigger_bottom() -> None
     config = replace(
         FAST,
         bottom_detection_stable_s=3.0,
+        bottom_neutral_confirmation_s=1.0,
         bottom_detection_depth_tolerance_m=0.02,
     )
     mission = SearchApproachMission(config, ("echinus",))
@@ -258,8 +294,8 @@ def test_depth_change_inside_full_window_does_not_false_trigger_bottom() -> None
             observation(index, depth=0.20 + index * 0.01), now
         )
     assert decision is not None
+    # 慢速下潜不能满足完整 3 秒平台，因此不会误切到扫描。
     assert decision.state == SearchTestState.DESCENDING
-    assert decision.motion.vertical == pytest.approx(-0.60)
 
 
 def test_bottom_detection_requires_minimum_real_descent() -> None:
@@ -297,7 +333,11 @@ def test_default_bottom_tolerance_accepts_float32_five_centimeter_span() -> None
 
 
 def test_pause_time_does_not_count_towards_three_second_bottom_window() -> None:
-    config = replace(FAST, bottom_detection_stable_s=3.0)
+    config = replace(
+        FAST,
+        bottom_detection_stable_s=3.0,
+        bottom_neutral_confirmation_s=1.0,
+    )
     mission = SearchApproachMission(config, ("echinus",))
     mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
     mission.step(observation(1, depth=0.60), 0.10)
@@ -344,6 +384,33 @@ def test_scan_accumulates_right_turn_across_north() -> None:
         decision = mission.step(observation(frame, depth=1.30, yaw=yaw), now)
     assert decision.state == SearchTestState.ADVANCING
     assert decision.motion.is_neutral()
+
+
+def test_scan_continues_between_fresh_detection_frames() -> None:
+    """20Hz 控制不应因为 YOLO 本周期没有新帧而一转一停。"""
+
+    mission = started()
+    frame, now = reach_scan(mission)
+    first = mission.step(observation(frame + 1, depth=1.30, yaw=355.0), now + 0.05)
+    assert first.motion.yaw == pytest.approx(0.40)
+    repeated = mission.step(
+        observation(frame + 1, depth=1.30, yaw=10.0), now + 0.10
+    )
+    assert repeated.state == SearchTestState.SCANNING
+    assert repeated.motion.yaw == pytest.approx(0.40)
+    assert mission.scan_progress_deg == pytest.approx(20.0)
+
+
+def test_scan_reporter_emits_fifteen_degree_milestone() -> None:
+    mission = started()
+    frame, now = reach_scan(mission)
+    messages: list[str] = []
+    reporter = SearchStateReporter(mission, emit=messages.append)
+    initial = mission.step(observation(frame + 1, depth=1.30, yaw=355.0), now + 0.05)
+    reporter.report(initial, observation(frame + 1, depth=1.30, yaw=355.0), now + 0.05)
+    current = mission.step(observation(frame + 2, depth=1.30, yaw=11.0), now + 0.10)
+    reporter.report(current, observation(frame + 2, depth=1.30, yaw=11.0), now + 0.10)
+    assert any("已完成 15/360°" in item for item in messages)
 
 
 def test_no_target_advances_at_point_four_for_two_seconds() -> None:
@@ -398,7 +465,8 @@ def test_duplicate_frame_does_not_count_towards_acquisition() -> None:
         now += 0.05
         decision = mission.step(observation(frame + 1, detections=(item,), depth=1.30), now)
     assert decision.state == SearchTestState.SCANNING
-    assert decision.motion.is_neutral()
+    assert decision.motion.yaw == pytest.approx(0.40)
+    assert tuple(mission.candidate_history) == (True,)
 
 
 def test_invalid_or_stale_perception_stops_motion_without_counting_a_miss() -> None:

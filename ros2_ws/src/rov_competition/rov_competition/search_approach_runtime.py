@@ -228,6 +228,7 @@ class SearchSessionLogger:
             "bottom_detection_stable_s": None,
             "bottom_detection_depth_tolerance_m": None,
             "bottom_detection_minimum_descent_m": None,
+            "bottom_neutral_confirmation_s": None,
             "end_depth_m": None,
             "video_file": None,
             "gripper_profile": gripper_profile,
@@ -243,6 +244,7 @@ class SearchSessionLogger:
         bottom_detection_stable_s: float,
         bottom_detection_depth_tolerance_m: float,
         bottom_detection_minimum_descent_m: float,
+        bottom_neutral_confirmation_s: float,
     ) -> None:
         self.metadata.update(
             {
@@ -255,6 +257,7 @@ class SearchSessionLogger:
                 "bottom_detection_minimum_descent_m": (
                     bottom_detection_minimum_descent_m
                 ),
+                "bottom_neutral_confirmation_s": bottom_neutral_confirmation_s,
             }
         )
         self._write_metadata()
@@ -364,7 +367,7 @@ class SearchSessionLogger:
 class SearchApproachNode(DatasetDriveNode):
     """增加检测、带框截图、任务状态和显式机械爪服务。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, capture_images: bool = True) -> None:
         super().__init__(source=SOURCE, node_name="rov_search_approach_test")
         self.detection_received_at: float | None = None
         self.detection_frame_id = 0
@@ -378,12 +381,16 @@ class SearchApproachNode(DatasetDriveNode):
         self.create_subscription(
             TargetDetectionArray, "/rov/detections", self._handle_detections, 10
         )
-        self.create_subscription(
-            CompressedImage,
-            "/rov/annotated_image/compressed",
-            self._handle_image,
-            5,
-        )
+        # 自动搜索只需要轻量检测消息；不再额外接收每帧的大尺寸 JPEG，
+        # 以免图像回调挤占检测/遥测回调。rqt 查看器仍独立订阅带框画面。
+        # 只有人工抓取标定需要保存同帧截图，才启用此订阅。
+        if capture_images:
+            self.create_subscription(
+                CompressedImage,
+                "/rov/annotated_image/compressed",
+                self._handle_image,
+                5,
+            )
         self.gripper_client = self.create_client(
             SetGripper, "/rov/control/set_gripper"
         )
@@ -747,6 +754,16 @@ def _interactive_parameters(
         f"{search_config.bottom_detection_minimum_descent_m:.2f} m"
     )
     print(
+        "  疑似触底后：稳定 "
+        f"{search_config.bottom_neutral_confirmation_s:.1f} s 即回中，"
+        "由 ALT_HOLD 定深完成剩余确认"
+    )
+    print(
+        "  扫描：连续右转 yaw power="
+        f"{search_config.scan_yaw_command:.2f}；每 "
+        f"{search_config.scan_report_step_deg:.0f}° 输出里程碑"
+    )
+    print(
         f"  硬深度上限：{search_config.maximum_operation_depth_m:.2f} m"
     )
     print(
@@ -813,7 +830,11 @@ def main(argv: list[str] | None = None) -> int:
             if not robot.allow_gripper_actuation:
                 print("机械爪权限当前关闭；C/O 将被禁用，其他标定功能可用。")
         else:
-            print("扫描 power=0.20，无目标前进 power=0.40/2.0s，面积 0.10 停止。")
+            print(
+                f"扫描 yaw power={search.scan_yaw_command:.2f}（连续转动、每 "
+                f"{search.scan_report_step_deg:.0f}° 报告），无目标前进 "
+                "power=0.40/2.0s，面积 0.10 停止。"
+            )
         return 0
     if not args.session_dir:
         print("真实执行必须使用 --session-dir")
@@ -841,7 +862,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rclpy.init(args=[raw_args[0]], signal_handler_options=SignalHandlerOptions.NO)
     try:
-        node = SearchApproachNode()
+        node = SearchApproachNode(capture_images=manual_mode)
         node.wait_for_initial_data(timeout_s=10.0)
         node.wait_for_perception(timeout_s=20.0)
         error = _prearm_error(
@@ -914,6 +935,9 @@ def main(argv: list[str] | None = None) -> int:
             ),
             bottom_detection_minimum_descent_m=(
                 search.bottom_detection_minimum_descent_m
+            ),
+            bottom_neutral_confirmation_s=(
+                search.bottom_neutral_confirmation_s
             ),
         )
 

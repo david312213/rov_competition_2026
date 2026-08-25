@@ -63,6 +63,10 @@ class SearchApproachConfig:
     # 至少观察到一小段真实下潜，避免深度传感器从启动起
     # 就卡死时，程序在水面误判“已触底”并开始旋转。
     bottom_detection_minimum_descent_m: float = 0.10
+    # 先在持续下潜指令下观察到一段深度平台，才认为“可能触底”；
+    # 达到该时间后立即把升沉回中，由 ALT_HOLD 定深完成剩余确认，
+    # 避免在完整 3 秒确认窗口内一直向池底施力。
+    bottom_neutral_confirmation_s: float = 1.0
     descent_tolerance_m: float = 0.05
     descent_gain: float = 0.8
     descent_minimum_command: float = 0.10
@@ -74,8 +78,9 @@ class SearchApproachConfig:
     perception_hold_timeout_s: float = 1.0
     perception_abort_timeout_s: float = 5.0
 
-    scan_yaw_command: float = 0.20
+    scan_yaw_command: float = 0.40
     scan_angle_deg: float = 360.0
+    scan_report_step_deg: float = 15.0
     scan_tolerance_deg: float = 3.0
     scan_timeout_s: float = 120.0
     maximum_yaw_step_deg: float = 45.0
@@ -128,6 +133,7 @@ class SearchApproachConfig:
             self.bottom_detection_stable_s,
             self.bottom_detection_depth_tolerance_m,
             self.bottom_detection_minimum_descent_m,
+            self.bottom_neutral_confirmation_s,
             self.descent_tolerance_m,
             self.descent_gain,
             self.descent_minimum_command,
@@ -137,6 +143,7 @@ class SearchApproachConfig:
             self.perception_abort_timeout_s,
             self.scan_yaw_command,
             self.scan_angle_deg,
+            self.scan_report_step_deg,
             self.scan_tolerance_deg,
             self.scan_timeout_s,
             self.maximum_yaw_step_deg,
@@ -177,6 +184,10 @@ class SearchApproachConfig:
             raise SearchTestError("触底深度变化容差必须小于最小实际下潜量")
         if self.bottom_detection_stable_s >= self.descent_timeout_s:
             raise SearchTestError("触底稳定时间必须小于下潜超时")
+        if self.bottom_neutral_confirmation_s >= self.bottom_detection_stable_s:
+            raise SearchTestError("触底回中确认时间必须小于完整触底稳定时间")
+        if self.scan_report_step_deg > self.scan_angle_deg:
+            raise SearchTestError("扫描进度提示步长不能大于扫描总角度")
         commands = (
             self.descent_minimum_command,
             self.scan_yaw_command,
@@ -363,6 +374,8 @@ class SearchStateReporter:
         self._last_state: SearchTestState | None = None
         self._last_progress_at: float | None = None
         self._last_bottom_second = 0
+        self._bottom_neutral_reported = False
+        self._last_scan_milestone_deg = 0.0
         self._terminal_reported = False
 
     def report(
@@ -400,6 +413,10 @@ class SearchStateReporter:
             )
             self._last_state = decision.state
             self._last_progress_at = now
+            if decision.state == SearchTestState.DESCENDING:
+                self._bottom_neutral_reported = False
+            if decision.state == SearchTestState.SCANNING:
+                self._last_scan_milestone_deg = 0.0
 
         if decision.state == SearchTestState.DESCENDING:
             current_second = min(
@@ -412,8 +429,30 @@ class SearchStateReporter:
                     f"触底稳定计时 {self._last_bottom_second}s -> {current_second}s"
                 )
             self._last_bottom_second = current_second
+            if (
+                not self._bottom_neutral_reported
+                and self._mission.bottom_stable_duration_s
+                >= self._mission.config.bottom_neutral_confirmation_s
+                and decision.motion.is_neutral()
+            ):
+                self._emit(
+                    "[探底动作] DESCENDING | 疑似触底已稳定 "
+                    f"{self._mission.bottom_stable_duration_s:.1f}s，"
+                    "升沉回中，由 ALT_HOLD 定深完成确认"
+                )
+                self._bottom_neutral_reported = True
         elif state_changed:
             self._last_bottom_second = 0
+
+        if decision.state == SearchTestState.SCANNING:
+            step = self._mission.config.scan_report_step_deg
+            milestone = math.floor(self._mission.scan_progress_deg / step) * step
+            if milestone > self._last_scan_milestone_deg:
+                self._last_scan_milestone_deg = milestone
+                self._emit(
+                    "[扫描里程碑] SCANNING | "
+                    f"已完成 {milestone:.0f}/{self._mission.config.scan_angle_deg:.0f}°"
+                )
 
         if decision.state in {SearchTestState.COMPLETE, SearchTestState.ABORTED}:
             if not self._terminal_reported:
@@ -439,7 +478,10 @@ class SearchStateReporter:
         if decision.state == SearchTestState.DESCENDING:
             return f"power={self._mission.descent_command:.2f}"
         if decision.state == SearchTestState.SCANNING:
-            return f"右转 power={self._mission.config.scan_yaw_command:.2f}"
+            return (
+                f"连续右转 yaw_power={self._mission.config.scan_yaw_command:.2f}，"
+                f"每 {self._mission.config.scan_report_step_deg:.0f}° 报告一次"
+            )
         if decision.state == SearchTestState.ADVANCING:
             return (
                 f"前进 power={self._mission.config.advance_forward_command:.2f}, "
@@ -476,7 +518,8 @@ class SearchStateReporter:
                 f"扫描={self._mission.scan_progress_deg:.1f}/"
                 f"{self._mission.config.scan_angle_deg:.0f}° | "
                 f"轮次={self._mission.search_cycle}/"
-                f"{self._mission.config.maximum_search_cycles} | yaw={decision.motion.yaw:+.2f}"
+                f"{self._mission.config.maximum_search_cycles} | "
+                f"yaw_power={decision.motion.yaw:+.2f}"
             )
         if state == SearchTestState.ADVANCING:
             return (
@@ -721,7 +764,18 @@ class SearchApproachMission:
         if not observation.perception_valid:
             return self._decision(MotionCommand.neutral(), observation, "没有新鲜图像，回中等待")
         if not new_frame:
-            return self._decision(MotionCommand.neutral(), observation, "图像帧未更新，回中等待")
+            # 控制循环固定为 20 Hz，YOLO 帧率不必与它严格同频。只要
+            # 最近检测帧仍在外层的 freshness 窗口内，扫描和无目标
+            # 前进就应连续执行，不能在两张新帧之间一转一停。
+            # 目标确认、漏检、对准和接近仍只消费真正的新帧，绝不把
+            # 同一张旧框重复计数或据此继续靠近。
+            if self.state == SearchTestState.SCANNING:
+                return self._step_scanning(observation, now)
+            if self.state == SearchTestState.ADVANCING:
+                return self._step_advancing(observation, now)
+            return self._decision(
+                MotionCommand.neutral(), observation, "等待下一张新检测帧，保持停车"
+            )
 
         if self.state == SearchTestState.MANUAL_CALIBRATION:
             return self._step_manual_calibration(observation, now)
@@ -859,10 +913,15 @@ class SearchApproachMission:
                 "开始向右扫描",
             )
 
-        # 与键盘工具按住“↓”完全一致：触底判定完成前，
-        # 持续发送操作员输入的固定负向 vertical。现在不再追踪
-        # 人工目标深度，而是直到深度平台判定触底。
-        vertical = -self.descent_command
+        # 与键盘工具按住“↓”一致地下潜，直到在持续推力下观察到
+        # 足够长的疑似平台。随后立即把 vertical 回中，由 ALT_HOLD
+        # 定住当前深度，剩余时间只用于确认平台没有消失。若深度重新
+        # 明显变化，稳定计时会归零，程序才恢复下潜指令。
+        hold_depth = (
+            enough_descent
+            and stable_duration_s >= self.config.bottom_neutral_confirmation_s
+        )
+        vertical = 0.0 if hold_depth else -self.descent_command
         progress_note = (
             f"已下潜 {max(0.0, descended_m):.2f} m"
             if enough_descent
@@ -876,7 +935,8 @@ class SearchApproachMission:
             observation,
             f"下潜探底：深度 {observation.depth_m:.2f} m，{progress_note}，"
             f"稳定 {self.bottom_stable_duration_s:.1f}/{self.config.bottom_detection_stable_s:.1f}s，"
-            f"变化 {depth_span_m:.3f}/{self.config.bottom_detection_depth_tolerance_m:.3f}m",
+            f"变化 {depth_span_m:.3f}/{self.config.bottom_detection_depth_tolerance_m:.3f}m，"
+            + ("ALT_HOLD 定深确认" if hold_depth else "继续下潜"),
         )
 
     def _step_scanning(
