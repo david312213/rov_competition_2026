@@ -108,6 +108,7 @@ def lock_and_approach(mission: SearchApproachMission) -> tuple[int, float, Detec
 
 
 def test_config_matches_rc2_pool_parameters() -> None:
+    assert BASE.descent_slowdown_distance_m == pytest.approx(0.20)
     assert BASE.scan_yaw_command == pytest.approx(0.20)
     assert BASE.advance_forward_command == pytest.approx(0.40)
     assert BASE.advance_duration_s == pytest.approx(2.0)
@@ -121,18 +122,17 @@ def test_start_uses_operator_relative_depth_and_power() -> None:
     decision = mission.start(
         observation(7, depth=0.20),
         relative_descent_m=0.50,
-        descent_maximum_command=0.25,
+        descent_maximum_command=0.60,
         now=1.0,
     )
     assert mission.start_depth_m == pytest.approx(0.20)
     assert decision.target_depth_m == pytest.approx(0.70)
-    assert mission.descent_maximum_command == pytest.approx(0.25)
+    assert mission.descent_maximum_command == pytest.approx(0.60)
     descent = mission.step(observation(8, depth=0.20), 1.05)
-    assert descent.motion.vertical < 0.0
-    assert abs(descent.motion.vertical) <= 0.25
+    assert descent.motion.vertical == pytest.approx(-0.60)
 
 
-@pytest.mark.parametrize("value", (0.09, 0.41, float("nan")))
+@pytest.mark.parametrize("value", (0.09, 0.81, float("nan")))
 def test_invalid_descent_power_is_rejected(value: float) -> None:
     mission = SearchApproachMission(FAST, ("echinus",))
     with pytest.raises(SearchTestError, match="power"):
@@ -142,6 +142,22 @@ def test_invalid_descent_power_is_rejected(value: float) -> None:
             descent_maximum_command=value,
             now=0.0,
         )
+
+
+def test_descent_uses_selected_maximum_then_slows_near_target() -> None:
+    """远处使用操作员输入的上限，最后一段再按距离减速。"""
+
+    mission = SearchApproachMission(FAST, ("echinus",))
+    mission.start(
+        observation(0, depth=0.20),
+        relative_descent_m=0.30,
+        descent_maximum_command=0.60,
+        now=0.0,
+    )
+    far = mission.step(observation(1, depth=0.20), 0.05)
+    assert far.motion.vertical == pytest.approx(-0.60)
+    near = mission.step(observation(2, depth=0.40), 0.10)
+    assert near.motion.vertical == pytest.approx(-0.30)
 
 
 def test_scan_accumulates_right_turn_across_north() -> None:
@@ -368,6 +384,18 @@ def test_invalid_depth_aborts_instead_of_blind_return() -> None:
 def test_robot_limit_must_cover_point_four_command() -> None:
     assert BASE.readiness_errors(robot_command_limit=0.40) == ()
     assert "0.40" in BASE.readiness_errors(robot_command_limit=0.10)[0]
+
+
+def test_robot_limit_must_cover_operator_descent_power() -> None:
+    assert BASE.readiness_errors(
+        robot_command_limit=0.80,
+        descent_maximum_command=0.80,
+    ) == ()
+    error = BASE.readiness_errors(
+        robot_command_limit=0.40,
+        descent_maximum_command=0.60,
+    )
+    assert error and "0.60" in error[0]
 
 
 def test_focus_pause_does_not_consume_advance_duration() -> None:

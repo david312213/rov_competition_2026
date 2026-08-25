@@ -58,6 +58,7 @@ class SearchApproachConfig:
     descent_tolerance_m: float = 0.05
     descent_gain: float = 0.8
     descent_minimum_command: float = 0.10
+    descent_slowdown_distance_m: float = 0.20
     descent_settle_s: float = 1.0
     descent_timeout_s: float = 45.0
 
@@ -115,6 +116,7 @@ class SearchApproachConfig:
             self.descent_tolerance_m,
             self.descent_gain,
             self.descent_minimum_command,
+            self.descent_slowdown_distance_m,
             self.descent_settle_s,
             self.descent_timeout_s,
             self.scan_yaw_command,
@@ -206,6 +208,7 @@ class SearchApproachConfig:
         *,
         robot_command_limit: float,
         workflow: SearchWorkflow = SearchWorkflow.AUTO_APPROACH,
+        descent_maximum_command: float | None = None,
     ) -> tuple[str, ...]:
         """列出 robot.yaml 不足以执行测试的原因。"""
 
@@ -218,6 +221,13 @@ class SearchApproachConfig:
         )
         if workflow == SearchWorkflow.MANUAL_GRASP_CALIBRATION:
             required = max(required, self.manual_maximum_command)
+        if descent_maximum_command is not None:
+            if (
+                not math.isfinite(descent_maximum_command)
+                or not 0.10 <= descent_maximum_command <= 0.80
+            ):
+                return ("下潜最大 power 必须在 0.10..0.80",)
+            required = max(required, descent_maximum_command)
         if robot_command_limit + 1e-9 < required:
             return (
                 f"robot.yaml command_limit={robot_command_limit:.2f} 小于测试所需 {required:.2f}",
@@ -373,9 +383,9 @@ class SearchApproachMission:
             raise SearchTestError("相对下潜距离必须大于 0")
         if (
             not math.isfinite(descent_maximum_command)
-            or not 0.10 <= descent_maximum_command <= 0.40
+            or not 0.10 <= descent_maximum_command <= 0.80
         ):
-            raise SearchTestError("下潜最大 power 必须在 0.10..0.40")
+            raise SearchTestError("下潜最大 power 必须在 0.10..0.80")
         target_depth = observation.depth_m + relative_descent_m
         if target_depth > self.config.maximum_operation_depth_m:
             raise SearchTestError(
@@ -545,7 +555,15 @@ class SearchApproachMission:
                 return self._decision(MotionCommand.neutral(), observation, "下潜完成，开始向右扫描")
             return self._decision(MotionCommand.neutral(), observation, "进入深度容差，等待稳定")
         self.settled_since = None
-        magnitude = min(self.descent_maximum_command, abs(error) * self.config.descent_gain)
+        # “下潜最大 power”应该真正在距离目标较远时生效。旧式为
+        # abs(error) * descent_gain：默认相对下潜 0.30m 时，即使输入
+        # 0.40，实际也只会发 0.24。现在在距目标大于等于减速距离时
+        # 发送选定的最大值；进入最后一段后按剩余距离线性减速。
+        slowdown_ratio = min(
+            1.0,
+            abs(error) / self.config.descent_slowdown_distance_m,
+        )
+        magnitude = self.descent_maximum_command * slowdown_ratio
         magnitude = max(self.config.descent_minimum_command, magnitude)
         # vertical > 0 是上升；目标更深时发负值，过深时允许小幅上升纠正。
         vertical = -magnitude if error > 0.0 else magnitude

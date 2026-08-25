@@ -8,6 +8,9 @@ search_test:
   descent_tolerance_m: 0.05
   descent_gain: 0.80
   descent_minimum_command: 0.10
+  # 距目标深度大于等于此值时使用现场输入的最大 power；
+  # 最后 0.20m 内按剩余距离线性减速。
+  descent_slowdown_distance_m: 0.20
   descent_settle_s: 1.0
   descent_timeout_s: 45.0
 

@@ -679,6 +679,7 @@ def _draw_window(
 def _interactive_parameters(
     node: SearchApproachNode,
     maximum_depth_m: float,
+    robot_command_limit: float,
 ) -> tuple[float, float, float, float]:
     if not sys.stdin.isatty():
         raise DatasetDriveError("真实测试必须在交互终端运行")
@@ -686,7 +687,14 @@ def _interactive_parameters(
     if not observation.depth_valid or not math.isfinite(observation.depth_m):
         raise DatasetDriveError("启动前深度反馈无效")
     relative = _prompt_float("相对下潜距离（米）", 0.30, 0.01, maximum_depth_m)
-    descent_power = _prompt_float("下潜最大 power ", 0.20, 0.10, 0.40)
+    descent_ceiling = min(0.80, robot_command_limit)
+    descent_default = min(0.60, descent_ceiling)
+    descent_power = _prompt_float(
+        "下潜最大 power ",
+        descent_default,
+        0.10,
+        descent_ceiling,
+    )
     start_depth = observation.depth_m
     target_depth = start_depth + relative
     if target_depth > maximum_depth_m:
@@ -725,8 +733,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"配置错误: {exc}")
         return 2
 
-    # dataset.yaml 在此只提供链路新鲜度和 ALT_HOLD 安全阈值。搜索测试的
-    # 最大输出为 0.40，不能被键盘采集的 maximum_command=0.80 误挡住。
+    # dataset.yaml 在此只提供链路新鲜度和 ALT_HOLD 安全阈值。除下潜外
+    # 的固定测试动作最大为 0.40；下潜上限由操作员现场输入，
+    # 并受 robot.yaml command_limit 二次限制。
     errors = list(
         search.readiness_errors(
             robot_command_limit=robot.command_limit,
@@ -841,8 +850,17 @@ def main(argv: list[str] | None = None) -> int:
         recorder.start()
         recorder.wait_until_receiving(timeout_s=10.0, pump=lambda: node.spin(0.0))
         relative, descent_power, start_depth, target_depth = _interactive_parameters(
-            node, search.maximum_operation_depth_m
+            node,
+            search.maximum_operation_depth_m,
+            robot.command_limit,
         )
+        selected_power_errors = search.readiness_errors(
+            robot_command_limit=robot.command_limit,
+            workflow=workflow,
+            descent_maximum_command=descent_power,
+        )
+        if selected_power_errors:
+            raise DatasetDriveError("; ".join(selected_power_errors))
         logger.set_start_parameters(
             start_depth_m=start_depth,
             relative_descent_m=relative,
