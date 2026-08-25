@@ -51,6 +51,13 @@ BALANCED_TIMEOUT_VALUES = {
     "dataset.safety.maximum_telemetry_age_s": 1.5,
     "dataset.safety.maximum_status_age_s": 3.0,
     "dataset.safety.maximum_attitude_age_s": 5.0,
+    "autonomy.mission.target_lost_timeout_s": 1.5,
+    "autonomy.mission.reacquire_grace_s": 1.0,
+    "autonomy.mission.maximum_heartbeat_age_s": 2.5,
+    "autonomy.mission.maximum_message_age_s": 1.5,
+    "autonomy.mission.perception_hold_timeout_s": 1.0,
+    "autonomy.mission.maximum_perception_age_s": 5.0,
+    "autonomy.mission.maximum_control_status_age_s": 3.0,
 }
 
 
@@ -749,12 +756,42 @@ _DATASET_TIMING_PATHS = {
     "dataset.safety.maximum_status_age_s": ("safety", "maximum_status_age_s"),
     "dataset.safety.maximum_attitude_age_s": ("safety", "maximum_attitude_age_s"),
 }
+_AUTONOMY_TIMING_PATHS = {
+    "autonomy.mission.target_lost_timeout_s": ("mission", "target_lost_timeout_s"),
+    "autonomy.mission.reacquire_grace_s": ("mission", "reacquire_grace_s"),
+    "autonomy.mission.maximum_heartbeat_age_s": (
+        "mission",
+        "maximum_heartbeat_age_s",
+    ),
+    "autonomy.mission.maximum_message_age_s": (
+        "mission",
+        "maximum_message_age_s",
+    ),
+    "autonomy.mission.perception_hold_timeout_s": (
+        "mission",
+        "perception_hold_timeout_s",
+    ),
+    "autonomy.mission.maximum_perception_age_s": (
+        "mission",
+        "maximum_perception_age_s",
+    ),
+    "autonomy.mission.maximum_control_status_age_s": (
+        "mission",
+        "maximum_control_status_age_s",
+    ),
+}
 
 
 def _nested_number(
-    value: Mapping[str, Any], path: tuple[str, str], logical_name: str
+    value: Mapping[str, Any],
+    path: tuple[str, str],
+    logical_name: str,
+    *,
+    missing_default: float | None = None,
 ) -> float:
     section = _mapping(value.get(path[0]), path[0])
+    if path[1] not in section and missing_default is not None:
+        return float(missing_default)
     try:
         number = float(section[path[1]])
     except (KeyError, TypeError, ValueError) as exc:
@@ -770,13 +807,19 @@ def _set_nested_number(
     value[path[0]] = section
 
 
-def _timing_source_data(paths: FieldPaths) -> tuple[dict[str, Any], dict[str, Any]]:
+def _timing_source_data(
+    paths: FieldPaths,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     robot = _read_yaml(paths.robot_config, "实艇配置")
     dataset_source = (
         paths.dataset_config if paths.dataset_config.is_file() else paths.dataset_template
     )
     dataset = _read_yaml(dataset_source, "数据采集配置")
-    return robot, dataset
+    autonomy_source = (
+        paths.local_autonomy if paths.local_autonomy.is_file() else paths.source_autonomy
+    )
+    autonomy = _read_yaml(autonomy_source, "活动自主配置")
+    return robot, dataset, autonomy
 
 
 def inspect_balanced_timeouts(
@@ -785,7 +828,7 @@ def inspect_balanced_timeouts(
     """返回本地值、目标值及是否已经匹配；不修改任何文件。"""
 
     paths = field_paths(project_directory)
-    robot, dataset = _timing_source_data(paths)
+    robot, dataset, autonomy = _timing_source_data(paths)
     result: dict[str, tuple[float, float, bool]] = {}
     for logical_name, path in _ROBOT_TIMING_PATHS.items():
         current = _nested_number(robot, path, logical_name)
@@ -794,6 +837,17 @@ def inspect_balanced_timeouts(
     for logical_name, path in _DATASET_TIMING_PATHS.items():
         current = _nested_number(dataset, path, logical_name)
         expected = BALANCED_TIMEOUT_VALUES[logical_name]
+        result[logical_name] = (current, expected, abs(current - expected) <= 1e-9)
+    for logical_name, path in _AUTONOMY_TIMING_PATHS.items():
+        expected = BALANCED_TIMEOUT_VALUES[logical_name]
+        # 旧版 autonomy.local.yaml 可能没有后来增加的字段；配置加载器此时
+        # 使用的默认值就是当前平衡值。应用迁移时仍会把字段明确写入本地文件。
+        current = _nested_number(
+            autonomy,
+            path,
+            logical_name,
+            missing_default=expected,
+        )
         result[logical_name] = (current, expected, abs(current - expected) <= 1e-9)
     return result
 
@@ -810,20 +864,34 @@ def verify_balanced_timeouts(
         values = inspect_balanced_timeouts(project_directory)
         mismatched = [name for name, (_, _, valid) in values.items() if not valid]
         if mismatched:
-            return False, "尚未应用平衡阈值: " + ", ".join(mismatched)
-        from .config import load_dataset_config, load_robot_config
+            return (
+                False,
+                "尚未应用平衡阈值: "
+                + ", ".join(mismatched)
+                + "；请运行 ./scripts/start_tomorrow_test.sh timing",
+            )
+        from .config import (
+            load_autonomy_config,
+            load_dataset_config,
+            load_robot_config,
+        )
 
         robot = load_robot_config(paths.robot_config)
         dataset = load_dataset_config(paths.dataset_config)
+        autonomy = load_autonomy_config(active_autonomy_path(project_directory))
         if abs(robot.command_timeout_s - 0.5) > 1e-9:
             return False, "运动发布者消失看门狗不是 0.50s"
         if abs(robot.maximum_pilot_input_timeout_s - 3.0) > 1e-9:
             return False, "FS_PILOT_TIMEOUT 预检期望值不是 3.0s，未自动修改"
         if abs(dataset.maximum_status_age_s - 3.0) > 1e-9:
             return False, "数据采集控制状态阈值没有生效"
+        if abs(autonomy.mission.perception_hold_timeout_s - 1.0) > 1e-9:
+            return False, "自主感知回中等待阈值没有生效"
+        if abs(autonomy.mission.maximum_perception_age_s - 5.0) > 1e-9:
+            return False, "自主感知硬中止阈值没有生效"
     except (FieldSetupError, OSError, ValueError) as exc:
         return False, str(exc)
-    return True, "平衡型超时已应用；0.50s 运动看门狗和 3.0s Pilot 失控期望保持不变"
+    return True, "平衡型超时已应用到机器人、采集和活动自主配置；0.50s 运动看门狗和 3.0s Pilot 失控期望保持不变"
 
 
 def apply_balanced_timeouts(
@@ -831,16 +899,18 @@ def apply_balanced_timeouts(
     *,
     confirmation: str,
 ) -> dict[str, object]:
-    """备份并事务更新 Git 忽略的 robot.yaml 与 dataset.yaml。"""
+    """备份并事务更新 Git 忽略的现场配置和活动自主配置。"""
 
     if confirmation != BALANCED_TIMEOUT_CONFIRMATION:
         raise FieldSetupError("平衡超时确认词错误")
     paths = field_paths(project_directory)
-    robot, dataset = _timing_source_data(paths)
+    robot, dataset, autonomy = _timing_source_data(paths)
     for logical_name, path in _ROBOT_TIMING_PATHS.items():
         _set_nested_number(robot, path, BALANCED_TIMEOUT_VALUES[logical_name])
     for logical_name, path in _DATASET_TIMING_PATHS.items():
         _set_nested_number(dataset, path, BALANCED_TIMEOUT_VALUES[logical_name])
+    for logical_name, path in _AUTONOMY_TIMING_PATHS.items():
+        _set_nested_number(autonomy, path, BALANCED_TIMEOUT_VALUES[logical_name])
 
     # 微秒后缀避免连续两次应用时备份名相同。
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -851,13 +921,24 @@ def apply_balanced_timeouts(
     dataset_backup = paths.dataset_config.with_name(
         f"dataset.yaml.before-balanced-timeouts-{timestamp}"
     )
+    autonomy_existed = paths.local_autonomy.is_file()
+    autonomy_backup = paths.local_autonomy.with_name(
+        f"autonomy.local.yaml.before-balanced-timeouts-{timestamp}"
+    )
     shutil.copy2(paths.robot_config, robot_backup)
     if dataset_existed:
         shutil.copy2(paths.dataset_config, dataset_backup)
+    if autonomy_existed:
+        shutil.copy2(paths.local_autonomy, autonomy_backup)
 
     try:
         _atomic_yaml(paths.robot_config, robot)
         _atomic_yaml(paths.dataset_config, dataset)
+        # 没有本地活动配置时，仓库模板本身已经是新值，不额外创建本地文件。
+        # 有本地权重/类别配置时，只更新 mission 的超时字段，保留 detector
+        # 和现场调参的其余内容。
+        if autonomy_existed:
+            _atomic_yaml(paths.local_autonomy, autonomy)
         valid, reason = verify_balanced_timeouts(project_directory)
         if not valid:
             raise FieldSetupError(reason)
@@ -867,8 +948,12 @@ def apply_balanced_timeouts(
             "applied_at_utc": datetime.now(timezone.utc).isoformat(),
             "robot_backup": str(robot_backup),
             "dataset_backup": str(dataset_backup) if dataset_existed else None,
+            "autonomy_backup": str(autonomy_backup) if autonomy_existed else None,
             "robot_config_sha256": sha256_file(paths.robot_config),
             "dataset_config_sha256": sha256_file(paths.dataset_config),
+            "autonomy_config_sha256": sha256_file(
+                paths.local_autonomy if autonomy_existed else paths.source_autonomy
+            ),
             "values": dict(BALANCED_TIMEOUT_VALUES),
             "unchanged_flight_controller_parameters": [
                 "FS_PILOT_TIMEOUT",
@@ -884,6 +969,8 @@ def apply_balanced_timeouts(
             shutil.copy2(dataset_backup, paths.dataset_config)
         else:
             paths.dataset_config.unlink(missing_ok=True)
+        if autonomy_existed:
+            shutil.copy2(autonomy_backup, paths.local_autonomy)
         raise
 
 

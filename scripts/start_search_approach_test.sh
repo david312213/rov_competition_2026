@@ -153,6 +153,14 @@ PY
 ros2 run rov_competition rov_field_setup \
   --project-dir "${PROJECT_DIR}" weights verify
 
+if ! ros2 run rov_competition rov_field_setup \
+  --project-dir "${PROJECT_DIR}" timing verify; then
+  echo "活动自主配置仍是旧版；请先运行：" >&2
+  echo "  ./scripts/start_tomorrow_test.sh timing" >&2
+  echo "按提示输入 APPLY BALANCED TIMEOUTS 后，再重新启动本测试。" >&2
+  exit 2
+fi
+
 port_owner() { ss -H -lunp 2>/dev/null | grep -E ":$1([[:space:]]|$)" || true; }
 ensure_free_port() {
   local owner

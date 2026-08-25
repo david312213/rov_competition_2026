@@ -283,7 +283,7 @@ manage_weights() {
 apply_balanced_timing() {
   load_project_environment
   printf '%s\n' \
-    '这个阶段只更新本机 Git 忽略的 robot.yaml 和 dataset.yaml：' \
+    '这个阶段更新本机 Git 忽略的 robot.yaml、dataset.yaml 和活动自主配置：' \
     '  - 放宽通信、遥测和感知抖动阈值' \
     '  - 保持 0.50s 运动发布者看门狗' \
     '  - 不连接飞控，不修改任何 ArduSub 参数'

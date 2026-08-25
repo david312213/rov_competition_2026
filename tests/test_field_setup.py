@@ -449,7 +449,7 @@ def test_passed_rst_activation_upgrades_legacy_robot_config_with_backup(
     assert valid, reason
 
 
-def _write_legacy_local_timeouts(project: Path) -> tuple[bytes, bytes]:
+def _write_legacy_local_timeouts(project: Path) -> tuple[bytes, bytes, bytes]:
     """写入现场旧阈值，用于验证 Git 忽略配置的迁移。"""
 
     paths = field_paths(project)
@@ -472,14 +472,33 @@ def _write_legacy_local_timeouts(project: Path) -> tuple[bytes, bytes]:
         yaml.safe_dump(dataset, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
-    return paths.robot_config.read_bytes(), paths.dataset_config.read_bytes()
+
+    autonomy = yaml.safe_load(paths.source_autonomy.read_text(encoding="utf-8"))
+    autonomy["mission"]["target_lost_timeout_s"] = 0.8
+    autonomy["mission"]["reacquire_grace_s"] = 0.5
+    autonomy["mission"]["maximum_heartbeat_age_s"] = 1.5
+    autonomy["mission"]["maximum_message_age_s"] = 0.8
+    autonomy["mission"].pop("perception_hold_timeout_s", None)
+    autonomy["mission"]["maximum_perception_age_s"] = 0.75
+    autonomy["mission"]["maximum_control_status_age_s"] = 0.75
+    paths.local_autonomy.write_text(
+        yaml.safe_dump(autonomy, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return (
+        paths.robot_config.read_bytes(),
+        paths.dataset_config.read_bytes(),
+        paths.local_autonomy.read_bytes(),
+    )
 
 
 def test_balanced_timeout_apply_requires_exact_confirmation_and_keeps_files(
     tmp_path: Path,
 ) -> None:
     project = _make_project(tmp_path)
-    original_robot, original_dataset = _write_legacy_local_timeouts(project)
+    original_robot, original_dataset, original_autonomy = (
+        _write_legacy_local_timeouts(project)
+    )
     paths = field_paths(project)
 
     with pytest.raises(FieldSetupError, match="确认词"):
@@ -487,6 +506,7 @@ def test_balanced_timeout_apply_requires_exact_confirmation_and_keeps_files(
 
     assert paths.robot_config.read_bytes() == original_robot
     assert paths.dataset_config.read_bytes() == original_dataset
+    assert paths.local_autonomy.read_bytes() == original_autonomy
     assert not paths.timing_record.exists()
 
 
@@ -495,7 +515,9 @@ def test_balanced_timeout_apply_backs_up_updates_and_verifies_local_configs(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     project = _make_project(tmp_path)
-    original_robot, original_dataset = _write_legacy_local_timeouts(project)
+    original_robot, original_dataset, original_autonomy = (
+        _write_legacy_local_timeouts(project)
+    )
     paths = field_paths(project)
 
     before = inspect_balanced_timeouts(project)
@@ -503,7 +525,11 @@ def test_balanced_timeout_apply_backs_up_updates_and_verifies_local_configs(
     assert all(
         not matched
         for name, (_, _, matched) in before.items()
-        if name != "robot.control.command_timeout_s"
+        if name
+        not in {
+            "robot.control.command_timeout_s",
+            "autonomy.mission.perception_hold_timeout_s",
+        }
     )
 
     record = apply_balanced_timeouts(
@@ -513,8 +539,10 @@ def test_balanced_timeout_apply_backs_up_updates_and_verifies_local_configs(
 
     robot_backup = Path(str(record["robot_backup"]))
     dataset_backup = Path(str(record["dataset_backup"]))
+    autonomy_backup = Path(str(record["autonomy_backup"]))
     assert robot_backup.read_bytes() == original_robot
     assert dataset_backup.read_bytes() == original_dataset
+    assert autonomy_backup.read_bytes() == original_autonomy
     assert paths.timing_record.is_file()
     assert record["values"] == BALANCED_TIMEOUT_VALUES
     assert record["unchanged_flight_controller_parameters"] == [
@@ -531,6 +559,9 @@ def test_balanced_timeout_apply_backs_up_updates_and_verifies_local_configs(
     robot = yaml.safe_load(paths.robot_config.read_text(encoding="utf-8"))
     assert robot["control"]["command_timeout_s"] == pytest.approx(0.5)
     assert robot["safety"]["maximum_pilot_input_timeout_s"] == pytest.approx(3.0)
+    autonomy = yaml.safe_load(paths.local_autonomy.read_text(encoding="utf-8"))
+    assert autonomy["mission"]["perception_hold_timeout_s"] == pytest.approx(1.0)
+    assert autonomy["mission"]["maximum_perception_age_s"] == pytest.approx(5.0)
 
     assert main(["--project-dir", str(project), "status"]) == 0
     assert "timing: OK" in capsys.readouterr().out
@@ -541,7 +572,9 @@ def test_balanced_timeout_failed_verification_rolls_back_both_configs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _make_project(tmp_path)
-    original_robot, original_dataset = _write_legacy_local_timeouts(project)
+    original_robot, original_dataset, original_autonomy = (
+        _write_legacy_local_timeouts(project)
+    )
     paths = field_paths(project)
 
     monkeypatch.setattr(
@@ -557,4 +590,5 @@ def test_balanced_timeout_failed_verification_rolls_back_both_configs(
 
     assert paths.robot_config.read_bytes() == original_robot
     assert paths.dataset_config.read_bytes() == original_dataset
+    assert paths.local_autonomy.read_bytes() == original_autonomy
     assert not paths.timing_record.exists()
