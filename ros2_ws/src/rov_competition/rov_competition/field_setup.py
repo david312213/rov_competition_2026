@@ -26,6 +26,8 @@ from typing import Any, Callable, Mapping, Sequence
 
 import yaml
 
+from .gripper_test import candidate_gripper_profiles
+
 
 REQUIRED_TARGET_LABELS = (
     "echinus",
@@ -579,7 +581,20 @@ def activate_gripper(
     robot = _read_yaml(paths.robot_config, "实艇配置")
     safety = _mapping(robot.get("safety"), "safety")
     gripper = _mapping(robot.get("gripper"), "gripper")
-    profiles = _mapping(gripper.get("profiles"), "gripper.profiles")
+    raw_profiles = gripper.get("profiles")
+    if raw_profiles is None and "profiles" not in gripper:
+        # 队员已经在使用的 rc1 实艇配置只有单次 PWM 三个字段。
+        # 只有当候选档案具备完整的开/闭实物确认和逐命令 ACK、
+        # 并且操作员再输入激活确认词时，才把它升级成新格式。
+        # 原文件会在下方先备份；任何自检失败都会恢复备份。
+        profiles = candidate_gripper_profiles()
+        gripper = {
+            "active_profile": profile,
+            "profiles": profiles,
+        }
+    else:
+        # 新格式中显式写了 profiles 却不是映射，仍应拒绝激活。
+        profiles = _mapping(raw_profiles, "gripper.profiles")
     selected = _mapping(profiles.get(profile), f"gripper.profiles.{profile}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

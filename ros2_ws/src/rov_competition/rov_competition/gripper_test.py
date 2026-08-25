@@ -96,6 +96,16 @@ _CANDIDATE_GRIPPER_PROFILES: dict[str, dict[str, object]] = {
 }
 
 
+def candidate_gripper_profiles() -> dict[str, dict[str, object]]:
+    """返回两套未标定候选档案的独立副本。
+
+    候选测试与“通过后激活”必须使用完全相同的原始曲线。
+    每次都返回深副本，防止设置 ``calibrated`` 时改动模块常量。
+    """
+
+    return copy.deepcopy(_CANDIDATE_GRIPPER_PROFILES)
+
+
 def _mapping(value: object, name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise GripperTestError(f"{name} 必须是 YAML 映射")
@@ -125,9 +135,7 @@ def write_candidate_config(
         # 0.2.0rc1 以前的实艇配置只有 output_channel/open_pwm/
         # close_pwm。这些历史值不足以区分当前机械爪，所以不把它们
         # 冒充为已标定档案；只在本次安全测试副本中注入两套候选。
-        profiles: Mapping[str, Any] = copy.deepcopy(
-            _CANDIDATE_GRIPPER_PROFILES
-        )
+        profiles: Mapping[str, Any] = candidate_gripper_profiles()
         gripper = {
             "active_profile": profile,
             "profiles": profiles,

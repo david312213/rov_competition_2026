@@ -400,3 +400,43 @@ def test_passed_gripper_can_be_activated_and_manual_runtime_checks_evidence(
     )
     assert enabled is False
     assert "发生变化" in reason
+
+
+def test_passed_rst_activation_upgrades_legacy_robot_config_with_backup(
+    tmp_path: Path,
+) -> None:
+    """RST 实物通过后可升级 rc1 旧配置，但必须先留原文件备份。"""
+
+    project = _make_project(tmp_path)
+    _enable_verified_motion_gates(project)
+    paths = field_paths(project)
+    robot = yaml.safe_load(paths.robot_config.read_text(encoding="utf-8"))
+    robot["gripper"] = {
+        "output_channel": 12,
+        "open_pwm": 1650,
+        "close_pwm": 1900,
+    }
+    paths.robot_config.write_text(
+        yaml.safe_dump(robot, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    legacy_bytes = paths.robot_config.read_bytes()
+    result = _write_gripper_result(project, profile="rst")
+
+    record = activate_gripper(
+        project,
+        result,
+        profile="rst",
+        confirmation="ACTIVATE RST GRIPPER",
+    )
+
+    backup = Path(str(record["backup_path"]))
+    assert backup.read_bytes() == legacy_bytes
+    upgraded = yaml.safe_load(paths.robot_config.read_text(encoding="utf-8"))
+    assert upgraded["gripper"]["active_profile"] == "rst"
+    assert set(upgraded["gripper"]["profiles"]) == {"dalian", "rst"}
+    assert upgraded["gripper"]["profiles"]["rst"]["calibrated"] is True
+    assert upgraded["gripper"]["profiles"]["rst"]["allow_extended_pwm"] is True
+    assert upgraded["safety"]["allow_gripper_actuation"] is True
+    valid, reason = verify_gripper_activation(project)
+    assert valid, reason
