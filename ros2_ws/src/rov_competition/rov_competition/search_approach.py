@@ -77,6 +77,9 @@ class SearchApproachConfig:
     # 超过此时间才把它判定为真正的感知断流并中止任务。
     perception_hold_timeout_s: float = 1.0
     perception_abort_timeout_s: float = 5.0
+    # 检测帧与 20 Hz 输出不同步时，短时沿用上一张新帧计算出的
+    # “纯偏航”对准命令，避免命令在真正发布前就被重复帧回中覆盖。
+    tracking_command_hold_s: float = 0.20
 
     scan_yaw_command: float = 0.40
     scan_angle_deg: float = 360.0
@@ -108,6 +111,10 @@ class SearchApproachConfig:
     acquisition_required_hits: int = 3
     loss_required_frames: int = 5
     loss_confirmation_s: float = 0.80
+    # 对准时允许极短的 YOLO 空框抖动。宽限内只沿用上一条纯偏航
+    # 命令；自动接近阶段仍在第一张空框立即停车。
+    alignment_loss_grace_frames: int = 2
+    alignment_loss_grace_s: float = 0.20
     finish_window_frames: int = 5
     finish_required_hits: int = 4
     maximum_tracking_jump_ratio: float = 0.25
@@ -119,8 +126,9 @@ class SearchApproachConfig:
     manual_command_step: float = 0.01
     minimum_success_samples: int = 5
 
-    return_gain: float = 0.50
-    return_maximum_command: float = 0.20
+    return_gain: float = 1.00
+    return_minimum_command: float = 0.40
+    return_maximum_command: float = 0.60
     return_tolerance_m: float = 0.05
     return_settle_s: float = 1.0
     return_timeout_s: float = 60.0
@@ -141,6 +149,7 @@ class SearchApproachConfig:
             self.descent_timeout_s,
             self.perception_hold_timeout_s,
             self.perception_abort_timeout_s,
+            self.tracking_command_hold_s,
             self.scan_yaw_command,
             self.scan_angle_deg,
             self.scan_report_step_deg,
@@ -161,6 +170,7 @@ class SearchApproachConfig:
             self.approach_yaw_command,
             self.maximum_target_area_ratio,
             self.loss_confirmation_s,
+            self.alignment_loss_grace_s,
             self.maximum_tracking_jump_ratio,
             self.minimum_tracking_iou,
             self.manual_initial_command,
@@ -168,6 +178,7 @@ class SearchApproachConfig:
             self.manual_maximum_command,
             self.manual_command_step,
             self.return_gain,
+            self.return_minimum_command,
             self.return_maximum_command,
             self.return_tolerance_m,
             self.return_settle_s,
@@ -177,6 +188,8 @@ class SearchApproachConfig:
             raise SearchTestError("搜索测试的数值参数必须是大于 0 的有限数")
         if self.perception_abort_timeout_s <= self.perception_hold_timeout_s:
             raise SearchTestError("感知中止时间必须大于回中等待时间")
+        if self.tracking_command_hold_s >= self.perception_hold_timeout_s:
+            raise SearchTestError("对准命令短时保持必须小于感知回中等待时间")
         if (
             self.bottom_detection_depth_tolerance_m
             >= self.bottom_detection_minimum_descent_m
@@ -188,6 +201,10 @@ class SearchApproachConfig:
             raise SearchTestError("触底回中确认时间必须小于完整触底稳定时间")
         if self.scan_report_step_deg > self.scan_angle_deg:
             raise SearchTestError("扫描进度提示步长不能大于扫描总角度")
+        if self.alignment_loss_grace_s >= self.loss_confirmation_s:
+            raise SearchTestError("对准漏检宽限时间必须小于确认丢失时间")
+        if self.return_minimum_command > self.return_maximum_command:
+            raise SearchTestError("回收最小指令不能大于最大指令")
         commands = (
             self.descent_minimum_command,
             self.scan_yaw_command,
@@ -197,6 +214,7 @@ class SearchApproachConfig:
             self.far_forward_command,
             self.near_forward_command,
             self.approach_yaw_command,
+            self.return_minimum_command,
             self.return_maximum_command,
             self.manual_initial_command,
             self.manual_minimum_command,
@@ -221,6 +239,7 @@ class SearchApproachConfig:
             self.acquisition_window_frames,
             self.acquisition_required_hits,
             self.loss_required_frames,
+            self.alignment_loss_grace_frames,
             self.finish_window_frames,
             self.finish_required_hits,
             self.minimum_success_samples,
@@ -231,6 +250,8 @@ class SearchApproachConfig:
             raise SearchTestError("目标确认命中数不能超过窗口帧数")
         if self.finish_required_hits > self.finish_window_frames:
             raise SearchTestError("完成命中数不能超过窗口帧数")
+        if self.alignment_loss_grace_frames >= self.loss_required_frames:
+            raise SearchTestError("对准漏检宽限帧数必须小于确认丢失帧数")
 
         if not (
             self.manual_minimum_command
@@ -500,7 +521,11 @@ class SearchStateReporter:
     ) -> str:
         elapsed = max(0.0, now - self._mission.state_started_at)
         state = decision.state
-        if "暂停" in decision.message or "回中等待" in decision.message:
+        if (
+            "暂停" in decision.message
+            or "回中等待" in decision.message
+            or "短暂漏检" in decision.message
+        ):
             return decision.message
         if state == SearchTestState.DESCENDING:
             stable = min(
@@ -624,6 +649,9 @@ class SearchApproachMission:
         self.scan_progress_deg = 0.0
         self.previous_yaw_deg: float | None = None
         self.last_frame_id = -1
+        self.last_new_frame_at = 0.0
+        self.last_alignment_decision: SearchTestDecision | None = None
+        self.state_before_loss: SearchTestState | None = None
         self.candidate: Detection | None = None
         self.candidate_history: deque[bool] = deque(
             maxlen=config.acquisition_window_frames
@@ -669,6 +697,9 @@ class SearchApproachMission:
         self.bottom_depth_span_m = 0.0
         self.outcome = "running"
         self.last_frame_id = observation.frame_id
+        self.last_new_frame_at = float(now)
+        self.last_alignment_decision = None
+        self.state_before_loss = None
         self._clear_target()
         self._enter(SearchTestState.DESCENDING, observation, now)
         return self._decision(
@@ -754,6 +785,7 @@ class SearchApproachMission:
         new_frame = observation.frame_id > self.last_frame_id
         if new_frame:
             self.last_frame_id = observation.frame_id
+            self.last_new_frame_at = float(now)
 
         if self.state == SearchTestState.DESCENDING:
             return self._step_descending(observation, now)
@@ -773,6 +805,24 @@ class SearchApproachMission:
                 return self._step_scanning(observation, now)
             if self.state == SearchTestState.ADVANCING:
                 return self._step_advancing(observation, now)
+            if (
+                self.state == SearchTestState.ALIGNING
+                and self.last_alignment_decision is not None
+                and self.last_target_seen_at is not None
+                and now - self.last_new_frame_at
+                <= self.config.tracking_command_hold_s
+                and now - self.last_target_seen_at
+                <= self.config.alignment_loss_grace_s
+            ):
+                cached = self.last_alignment_decision
+                return self._decision(
+                    cached.motion,
+                    observation,
+                    "等待下一张新检测帧，短时保持最近偏航命令",
+                    cached.selected_target,
+                    cached.target_area_ratio,
+                    cached.horizontal_error,
+                )
             return self._decision(
                 MotionCommand.neutral(), observation, "等待下一张新检测帧，保持停车"
             )
@@ -1002,15 +1052,26 @@ class SearchApproachMission:
                     )
                 self._enter(SearchTestState.APPROACHING, observation, now)
                 return self._decision(MotionCommand.neutral(), observation, "目标已稳定居中，开始接近")
-            return self._decision(MotionCommand.neutral(), observation, "目标居中，等待多帧稳定")
+            decision = self._decision(
+                MotionCommand.neutral(),
+                observation,
+                "目标居中，等待多帧稳定",
+                target,
+                area,
+                error,
+            )
+            self.last_alignment_decision = decision
+            return decision
         self.aligned_frames = 0
         magnitude = min(self.config.maximum_yaw_command, abs(error) * self.config.yaw_gain)
         magnitude = max(self.config.minimum_yaw_command, magnitude)
         # 画面左侧 error<0 -> 键2的右转 yaw>0；右侧则键1左转。
         yaw = magnitude if error < 0.0 else -magnitude
-        return self._decision(
+        decision = self._decision(
             MotionCommand(yaw=yaw), observation, "仅用偏航对准目标", target, area, error
         )
+        self.last_alignment_decision = decision
+        return decision
 
     def _step_approaching(
         self, observation: MissionObservation, now: float
@@ -1107,7 +1168,10 @@ class SearchApproachMission:
                 return self._decision(MotionCommand.neutral(), observation, self.message)
             return self._decision(MotionCommand.neutral(), observation, "已进入回收容差，等待稳定")
         self.settled_since = None
-        vertical = min(self.config.return_maximum_command, error * self.config.return_gain)
+        vertical = min(
+            self.config.return_maximum_command,
+            max(self.config.return_minimum_command, error * self.config.return_gain),
+        )
         return self._decision(
             MotionCommand(vertical=max(0.0, vertical)),
             observation,
@@ -1140,9 +1204,22 @@ class SearchApproachMission:
                 self.aligned_frames = 0
                 self.finish_history.clear()
                 self._enter(SearchTestState.ALIGNING, observation, now)
-                area = self.tracked.box.area_ratio(observation.frame_width, observation.frame_height)
-                error = self._horizontal_error(self.tracked, observation)
-                return self._decision(MotionCommand.neutral(), observation, "5帧中至少3帧命中，目标已锁定", self.tracked, area, error)
+                # 锁定目标的这张新帧已经是有效观测，应立即
+                # 计算并缓存偏航决定。如果先额外发一帧中位，
+                # 60 Hz 状态循环可能在 20 Hz 发布时机前把真正的
+                # 对准命令覆盖掉。
+                decision = self._step_aligning(observation, now)
+                if decision.state == SearchTestState.ALIGNING:
+                    decision = self._decision(
+                        decision.motion,
+                        observation,
+                        "5帧中至少3帧命中，目标已锁定；开始偏航对准",
+                        decision.selected_target,
+                        decision.target_area_ratio,
+                        decision.horizontal_error,
+                    )
+                    self.last_alignment_decision = decision
+                return decision
             return None
 
         target = self._tracked_target(observation)
@@ -1151,14 +1228,42 @@ class SearchApproachMission:
             self.last_target_seen_at = now
             self.consecutive_misses = 0
             if self.state == SearchTestState.VERIFYING_LOSS:
-                self.aligned_frames = 0
-                self._enter(SearchTestState.ALIGNING, observation, now)
-                area = target.box.area_ratio(observation.frame_width, observation.frame_height)
-                return self._decision(MotionCommand.neutral(), observation, "目标恢复，重新对准", target, area, self._horizontal_error(target, observation))
+                # 恢复帧本身就参与对准并立即给出偏航决定，不能先回中
+                # 一帧，否则“命中一帧、漏一帧”时永远没有实际动作。
+                if self.state_before_loss == SearchTestState.APPROACHING:
+                    self.aligned_frames = 0
+                self.state = SearchTestState.ALIGNING
+                self.state_started_at = now
+                self.settled_since = None
+                self.state_before_loss = None
+                return self._step_aligning(observation, now)
             return None
 
         self.consecutive_misses += 1
+        since_seen_s = (
+            math.inf
+            if self.last_target_seen_at is None
+            else max(0.0, now - self.last_target_seen_at)
+        )
+        if (
+            self.state == SearchTestState.ALIGNING
+            and self.consecutive_misses <= self.config.alignment_loss_grace_frames
+            and since_seen_s <= self.config.alignment_loss_grace_s
+        ):
+            cached = self.last_alignment_decision
+            motion = MotionCommand.neutral() if cached is None else cached.motion
+            return self._decision(
+                motion,
+                observation,
+                f"目标短暂漏检 {self.consecutive_misses}/"
+                f"{self.config.alignment_loss_grace_frames}，"
+                "短时保持最近偏航；仍未恢复将停车确认",
+                self.tracked,
+                (None if cached is None else cached.target_area_ratio),
+                (None if cached is None else cached.horizontal_error),
+            )
         if self.state in {SearchTestState.ALIGNING, SearchTestState.APPROACHING}:
+            self.state_before_loss = self.state
             self._enter(SearchTestState.VERIFYING_LOSS, observation, now)
         if (
             self.consecutive_misses >= self.config.loss_required_frames
@@ -1279,6 +1384,8 @@ class SearchApproachMission:
         self.consecutive_misses = 0
         self.aligned_frames = 0
         self.finish_history.clear()
+        self.last_alignment_decision = None
+        self.state_before_loss = None
 
     def _enter(
         self, state: SearchTestState, observation: MissionObservation, now: float

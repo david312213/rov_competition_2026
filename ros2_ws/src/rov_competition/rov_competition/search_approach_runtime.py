@@ -794,9 +794,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"配置错误: {exc}")
         return 2
 
-    # dataset.yaml 在此只提供链路新鲜度和 ALT_HOLD 安全阈值。除下潜外
-    # 的固定测试动作最大为 0.40；下潜 power 由操作员现场输入，
-    # 深度平台连续稳定 3s 后状态机自动记录触底深度。
+    # dataset.yaml 在此只提供链路新鲜度和 ALT_HOLD 安全阈值。
+    # 扫描/前进最大为 0.40，回收上浮最大为 0.60；下潜 power
+    # 由操作员现场输入。深度平台连续稳定 3s 后状态机
+    # 自动记录触底深度。
     errors = list(
         search.readiness_errors(
             robot_command_limit=robot.command_limit,

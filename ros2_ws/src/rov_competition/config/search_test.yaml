@@ -26,6 +26,8 @@ search_test:
   # 只有连续超过 abort 时间才中止整个任务。
   perception_hold_timeout_s: 1.0
   perception_abort_timeout_s: 5.0
+  # 新检测帧之间最多短时保持上一条纯偏航对准命令。
+  tracking_command_hold_s: 0.20
 
   # 键2对应的向右偏航方向。这里是归一化 power，不是角度。
   scan_yaw_command: 0.40
@@ -59,6 +61,9 @@ search_test:
   acquisition_required_hits: 3
   loss_required_frames: 5
   loss_confirmation_s: 0.80
+  # 对准阶段一两帧空框不再反复切换状态；接近阶段仍立即停车。
+  alignment_loss_grace_frames: 2
+  alignment_loss_grace_s: 0.20
   finish_window_frames: 5
   finish_required_hits: 4
   maximum_tracking_jump_ratio: 0.25
@@ -71,8 +76,11 @@ search_test:
   manual_command_step: 0.01
   minimum_success_samples: 5
 
-  return_gain: 0.50
-  return_maximum_command: 0.20
+  # 实艇日志表明 +0.20 无法上浮。距目标较远时接近
+  # 0.60，接近启动深度后逐步降至 0.40。
+  return_gain: 1.00
+  return_minimum_command: 0.40
+  return_maximum_command: 0.60
   return_tolerance_m: 0.05
   return_settle_s: 1.0
   return_timeout_s: 60.0

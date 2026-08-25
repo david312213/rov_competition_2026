@@ -117,6 +117,7 @@ def test_config_matches_rc2_pool_parameters() -> None:
     assert BASE.bottom_neutral_confirmation_s == pytest.approx(1.0)
     assert BASE.perception_hold_timeout_s == pytest.approx(1.0)
     assert BASE.perception_abort_timeout_s == pytest.approx(5.0)
+    assert BASE.tracking_command_hold_s == pytest.approx(0.20)
     assert BASE.scan_yaw_command == pytest.approx(0.40)
     assert BASE.scan_report_step_deg == pytest.approx(15.0)
     assert BASE.advance_forward_command == pytest.approx(0.40)
@@ -125,7 +126,12 @@ def test_config_matches_rc2_pool_parameters() -> None:
     assert BASE.acquisition_required_hits == 3
     assert BASE.loss_required_frames == 5
     assert BASE.loss_confirmation_s == pytest.approx(0.8)
+    assert BASE.alignment_loss_grace_frames == 2
+    assert BASE.alignment_loss_grace_s == pytest.approx(0.20)
     assert BASE.finish_required_hits == 4
+    assert BASE.return_gain == pytest.approx(1.0)
+    assert BASE.return_minimum_command == pytest.approx(0.40)
+    assert BASE.return_maximum_command == pytest.approx(0.60)
 
 
 def test_perception_abort_timeout_must_follow_hold_timeout() -> None:
@@ -134,6 +140,33 @@ def test_perception_abort_timeout_must_follow_hold_timeout() -> None:
             BASE,
             perception_hold_timeout_s=3.0,
             perception_abort_timeout_s=3.0,
+        )
+
+
+def test_alignment_hold_and_loss_grace_must_remain_bounded() -> None:
+    with pytest.raises(SearchTestError, match="对准命令短时保持"):
+        replace(
+            BASE,
+            tracking_command_hold_s=BASE.perception_hold_timeout_s,
+        )
+    with pytest.raises(SearchTestError, match="对准漏检宽限时间"):
+        replace(
+            BASE,
+            alignment_loss_grace_s=BASE.loss_confirmation_s,
+        )
+    with pytest.raises(SearchTestError, match="对准漏检宽限帧数"):
+        replace(
+            BASE,
+            alignment_loss_grace_frames=BASE.loss_required_frames,
+        )
+
+
+def test_return_minimum_cannot_exceed_return_maximum() -> None:
+    with pytest.raises(SearchTestError, match="回收最小指令"):
+        replace(
+            BASE,
+            return_minimum_command=0.70,
+            return_maximum_command=0.60,
         )
 
 
@@ -516,16 +549,131 @@ def test_left_box_turns_right_and_right_box_turns_left() -> None:
         now += 0.05
         decision = mission.step(observation(frame, detections=(left,), depth=1.30), now)
     assert decision.state == SearchTestState.ALIGNING
-    frame += 1
-    decision = mission.step(observation(frame, detections=(left,), depth=1.30), now + 0.05)
+    # 第 3 次命中已经完成目标确认，这张帧必须立即
+    # 产生偏航命令，不应额外插入一帧停车。
     assert decision.motion.yaw > 0.0
 
     mission.tracked = target(left=520, right=620)
     frame += 1
     decision = mission.step(
-        observation(frame, detections=(mission.tracked,), depth=1.30), now + 0.10
+        observation(frame, detections=(mission.tracked,), depth=1.30), now + 0.05
     )
     assert decision.motion.yaw < 0.0
+
+
+def test_alignment_short_misses_hold_yaw_without_state_flapping() -> None:
+    mission = started()
+    frame, now = reach_scan(mission)
+    left = target(left=20, right=120)
+    for _ in range(3):
+        frame += 1
+        now += 0.05
+        decision = mission.step(
+            observation(frame, detections=(left,), depth=1.30), now
+        )
+    expected_yaw = decision.motion.yaw
+    assert expected_yaw > 0.0
+
+    frame += 1
+    first = mission.step(observation(frame, depth=1.30), now + 0.05)
+    assert first.state == SearchTestState.ALIGNING
+    assert first.motion.yaw == pytest.approx(expected_yaw)
+    assert mission.consecutive_misses == 1
+
+    frame += 1
+    second = mission.step(observation(frame, depth=1.30), now + 0.10)
+    assert second.state == SearchTestState.ALIGNING
+    assert second.motion.yaw == pytest.approx(expected_yaw)
+    assert mission.consecutive_misses == 2
+
+    frame += 1
+    third = mission.step(observation(frame, depth=1.30), now + 0.25)
+    assert third.state == SearchTestState.VERIFYING_LOSS
+    assert third.motion.is_neutral()
+
+
+def test_alignment_recovery_frame_immediately_restores_yaw() -> None:
+    mission = started()
+    frame, now = reach_scan(mission)
+    left = target(left=20, right=120)
+    for _ in range(3):
+        frame += 1
+        now += 0.05
+        decision = mission.step(
+            observation(frame, detections=(left,), depth=1.30), now
+        )
+    expected_yaw = decision.motion.yaw
+
+    for elapsed in (0.05, 0.10, 0.25):
+        frame += 1
+        decision = mission.step(observation(frame, depth=1.30), now + elapsed)
+    assert decision.state == SearchTestState.VERIFYING_LOSS
+    assert decision.motion.is_neutral()
+
+    frame += 1
+    recovered = mission.step(
+        observation(frame, detections=(left,), depth=1.30), now + 0.30
+    )
+    assert recovered.state == SearchTestState.ALIGNING
+    assert recovered.motion.yaw == pytest.approx(expected_yaw)
+
+
+def test_alignment_duplicate_control_ticks_hold_only_recent_yaw() -> None:
+    mission = started()
+    frame, now = reach_scan(mission)
+    left = target(left=20, right=120)
+    for _ in range(3):
+        frame += 1
+        now += 0.05
+        decision = mission.step(
+            observation(frame, detections=(left,), depth=1.30), now
+        )
+    expected_yaw = decision.motion.yaw
+
+    repeated = mission.step(
+        observation(frame, detections=(left,), depth=1.30), now + 0.05
+    )
+    assert repeated.state == SearchTestState.ALIGNING
+    assert repeated.motion.yaw == pytest.approx(expected_yaw)
+
+    expired = mission.step(
+        observation(frame, detections=(left,), depth=1.30), now + 0.21
+    )
+    assert expired.state == SearchTestState.ALIGNING
+    assert expired.motion.is_neutral()
+
+
+def test_alternating_hit_and_single_miss_can_complete_alignment() -> None:
+    """命中一帧、漏一帧时，一两帧漏检不得清空居中计数。"""
+
+    mission = started()
+    frame, now = reach_scan(mission)
+    centered = target()
+    for hit in (True, False, True, False, True):
+        frame += 1
+        now += 0.05
+        decision = mission.step(
+            observation(
+                frame,
+                detections=(centered,) if hit else (),
+                depth=1.30,
+            ),
+            now,
+        )
+    assert decision.state == SearchTestState.ALIGNING
+    assert mission.aligned_frames == 1
+
+    frame += 1
+    miss = mission.step(observation(frame, depth=1.30), now + 0.05)
+    assert miss.state == SearchTestState.ALIGNING
+    assert mission.aligned_frames == 1
+
+    frame += 1
+    recovered = mission.step(
+        observation(frame, detections=(centered,), depth=1.30), now + 0.10
+    )
+    assert recovered.state == SearchTestState.APPROACHING
+    assert recovered.motion.is_neutral()
 
 
 def test_first_miss_stops_and_two_misses_do_not_unlock() -> None:
@@ -630,8 +778,12 @@ def test_return_only_ascends_and_never_redescends() -> None:
     mission = started()
     mission.request_normal_finish(observation(1, depth=1.50), 1.0)
     ascending = mission.step(observation(2, depth=1.50), 1.05)
-    assert ascending.motion.vertical > 0.0
-    shallower = mission.step(observation(3, depth=0.90), 1.10)
+    assert ascending.motion.vertical == pytest.approx(0.50)
+    far = mission.step(observation(3, depth=1.80), 1.10)
+    assert far.motion.vertical == pytest.approx(0.60)
+    near = mission.step(observation(4, depth=1.10), 1.15)
+    assert near.motion.vertical == pytest.approx(0.40)
+    shallower = mission.step(observation(5, depth=0.90), 1.20)
     assert shallower.motion.is_neutral()
 
 
@@ -643,9 +795,9 @@ def test_invalid_depth_aborts_instead_of_blind_return() -> None:
     assert decision.motion.is_neutral()
 
 
-def test_robot_limit_must_cover_point_four_command() -> None:
-    assert BASE.readiness_errors(robot_command_limit=0.40) == ()
-    assert "0.40" in BASE.readiness_errors(robot_command_limit=0.10)[0]
+def test_robot_limit_must_cover_point_six_return_command() -> None:
+    assert BASE.readiness_errors(robot_command_limit=0.60) == ()
+    assert "0.60" in BASE.readiness_errors(robot_command_limit=0.40)[0]
 
 
 def test_robot_limit_must_cover_operator_descent_power() -> None:
@@ -757,6 +909,6 @@ def test_manual_workflow_readiness_includes_manual_power_ceiling() -> None:
         workflow=SearchWorkflow.MANUAL_GRASP_CALIBRATION,
     )
     assert BASE.readiness_errors(
-        robot_command_limit=0.40,
+        robot_command_limit=0.60,
         workflow=SearchWorkflow.MANUAL_GRASP_CALIBRATION,
     ) == ()
