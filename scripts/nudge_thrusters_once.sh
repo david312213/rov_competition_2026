@@ -20,6 +20,8 @@ DURATION_S="1.0"
 CONFIRMATION="NUDGE ROV ONCE"
 
 GATEWAY_PID=""
+REUSE_EXISTING_GATEWAY=false
+CONTROL_TOUCHED=false
 CLEANED_UP=false
 SESSION_DIR="${PROJECT_DIR}/output/thruster_nudges/$(date +%Y%m%d_%H%M%S)"
 
@@ -111,9 +113,15 @@ cleanup() {
   if [[ "${CLEANED_UP}" == true ]]; then return; fi
   CLEANED_UP=true
   trap - EXIT INT TERM
-  best_effort_lock
+  if [[ "${CONTROL_TOUCHED}" == true ]]; then
+    best_effort_lock
+  fi
   stop_gateway
-  echo "日志：${SESSION_DIR}/gateway.log"
+  if [[ -n "${GATEWAY_PID}" ]]; then
+    echo "日志：${SESSION_DIR}/gateway.log"
+  elif [[ "${REUSE_EXISTING_GATEWAY}" == true ]]; then
+    echo "已上锁并关闭本次许可；原有飞控网关继续运行。"
+  fi
   return "${status}"
 }
 trap cleanup EXIT
@@ -139,19 +147,24 @@ if ! ping -c 2 -W 2 "${ROV_IP}" >/dev/null; then
   exit 1
 fi
 
-if ros2 node list 2>/dev/null | grep -Eq \
-  '^/(rov_vehicle_gateway|rov_dataset_drive|rov_search_approach_test)$'; then
-  echo "发现旧控制节点；请先在原终端 Ctrl+C，避免两个控制源冲突：" >&2
-  ros2 node list 2>/dev/null | grep -E \
-    '^/(rov_vehicle_gateway|rov_dataset_drive|rov_search_approach_test)$' >&2
+ACTIVE_CONTROL_NODES="$(ros2 node list 2>/dev/null | grep -E \
+  '^/(rov_dataset_drive|rov_search_approach_test)$' || true)"
+if [[ -n "${ACTIVE_CONTROL_NODES}" ]]; then
+  echo "发现 WASD/自主控制节点，不能同时点动：" >&2
+  echo "${ACTIVE_CONTROL_NODES}" >&2
   exit 1
 fi
 
-PORT_OWNER="$(ss -H -lunp 2>/dev/null | grep -E ":${ROS_MAVLINK_PORT}([[:space:]]|$)" || true)"
-if [[ -n "${PORT_OWNER}" ]]; then
-  echo "UDP ${ROS_MAVLINK_PORT} 已被占用；请先关闭旧 ROS 网关：" >&2
-  echo "${PORT_OWNER}" >&2
-  exit 1
+if ros2 node list 2>/dev/null | grep -qx '/rov_vehicle_gateway'; then
+  REUSE_EXISTING_GATEWAY=true
+  echo "发现现有 /rov_vehicle_gateway；将在确认其已上锁且权限正确后复用。"
+else
+  PORT_OWNER="$(ss -H -lunp 2>/dev/null | grep -E ":${ROS_MAVLINK_PORT}([[:space:]]|$)" || true)"
+  if [[ -n "${PORT_OWNER}" ]]; then
+    echo "UDP ${ROS_MAVLINK_PORT} 被未知程序占用，无法安全启动网关：" >&2
+    echo "${PORT_OWNER}" >&2
+    exit 1
+  fi
 fi
 
 cat <<EOF
@@ -182,30 +195,41 @@ if [[ "${answer}" != "${CONFIRMATION}" ]]; then
   exit 2
 fi
 
-echo "[1/5] 启动 ROS/MAVLink 飞控网关并执行只读预检……"
-ros2 launch rov_competition telemetry.launch.py \
-  robot_config:="${ROBOT_CONFIG}" \
-  enable_actuation:=true \
-  enable_ros_arming:=true \
-  preflight_output_dir:="${SESSION_DIR}/preflight" \
-  >"${SESSION_DIR}/gateway.log" 2>&1 &
-GATEWAY_PID=$!
-
 GATEWAY_READY=false
-for _ in {1..100}; do
-  if ! kill -0 "${GATEWAY_PID}" 2>/dev/null; then
-    echo "飞控网关提前退出：" >&2
-    tail -n 50 "${SESSION_DIR}/gateway.log" >&2 || true
-    exit 1
-  fi
+if [[ "${REUSE_EXISTING_GATEWAY}" == true ]]; then
+  echo "[1/5] 复用现有 ROS/MAVLink 飞控网关并核对状态……"
   if ros2 service list 2>/dev/null | grep -qx '/rov/control/set_enabled'; then
     GATEWAY_READY=true
-    break
   fi
-  sleep 0.2
-done
+else
+  echo "[1/5] 启动 ROS/MAVLink 飞控网关并执行只读预检……"
+  ros2 launch rov_competition telemetry.launch.py \
+    robot_config:="${ROBOT_CONFIG}" \
+    enable_actuation:=true \
+    enable_ros_arming:=true \
+    preflight_output_dir:="${SESSION_DIR}/preflight" \
+    >"${SESSION_DIR}/gateway.log" 2>&1 &
+  GATEWAY_PID=$!
+
+  for _ in {1..100}; do
+    if ! kill -0 "${GATEWAY_PID}" 2>/dev/null; then
+      echo "飞控网关提前退出：" >&2
+      tail -n 50 "${SESSION_DIR}/gateway.log" >&2 || true
+      exit 1
+    fi
+    if ros2 service list 2>/dev/null | grep -qx '/rov/control/set_enabled'; then
+      GATEWAY_READY=true
+      break
+    fi
+    sleep 0.2
+  done
+fi
 if [[ "${GATEWAY_READY}" != true ]]; then
-  echo "20 秒内没有等到飞控网关服务；请查看 ${SESSION_DIR}/gateway.log" >&2
+  if [[ "${REUSE_EXISTING_GATEWAY}" == true ]]; then
+    echo "现有网关节点没有提供控制服务；请在其原终端 Ctrl+C 后重试。" >&2
+  else
+    echo "20 秒内没有等到飞控网关服务；请查看 ${SESSION_DIR}/gateway.log" >&2
+  fi
   exit 1
 fi
 
@@ -218,11 +242,15 @@ for expected in \
   'armed: false'; do
   if ! grep -q "${expected}" <<<"${STATUS_OUTPUT}"; then
     echo "网关状态不满足“${expected}”，拒绝点动。" >&2
+    if [[ "${REUSE_EXISTING_GATEWAY}" == true ]]; then
+      echo "若权限为 false，说明现有网关是只读启动；在原终端 Ctrl+C 后重新运行本脚本即可。" >&2
+    fi
     exit 1
   fi
 done
 
 echo "[2/5] 开启本次运行许可……"
+CONTROL_TOUCHED=true
 call_service_expect_success \
   "运行许可" /rov/control/set_enabled std_srvs/srv/SetBool "{data: true}"
 

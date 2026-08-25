@@ -37,6 +37,19 @@ def test_nudge_script_owns_the_complete_ros_gateway_lifecycle() -> None:
     assert "14551" in source
 
 
+def test_nudge_script_reuses_only_an_idle_gateway() -> None:
+    """已有网关可复用，但 WASD/自主节点和已解锁状态仍必须拒绝。"""
+
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert 'REUSE_EXISTING_GATEWAY=false' in source
+    assert "复用现有 ROS/MAVLink 飞控网关" in source
+    assert "rov_dataset_drive" in source
+    assert "rov_search_approach_test" in source
+    assert "'armed: false'" in source
+    assert 'CONTROL_TOUCHED=false' in source
+    assert 'if [[ "${CONTROL_TOUCHED}" == true ]]' in source
+
+
 def test_nudge_script_documents_real_motion_and_automatic_disarm() -> None:
     """现场提示不能把点动描述成无运动或永久消音。"""
 
