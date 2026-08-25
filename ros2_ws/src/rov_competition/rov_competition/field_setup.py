@@ -824,20 +824,34 @@ def _timing_source_data(
 
 def inspect_balanced_timeouts(
     project_directory: str | Path,
-) -> dict[str, tuple[float, float, bool]]:
+) -> dict[str, tuple[float | None, float, bool]]:
     """返回本地值、目标值及是否已经匹配；不修改任何文件。"""
 
     paths = field_paths(project_directory)
     robot, dataset, autonomy = _timing_source_data(paths)
-    result: dict[str, tuple[float, float, bool]] = {}
+    result: dict[str, tuple[float | None, float, bool]] = {}
     for logical_name, path in _ROBOT_TIMING_PATHS.items():
-        current = _nested_number(robot, path, logical_name)
         expected = BALANCED_TIMEOUT_VALUES[logical_name]
-        result[logical_name] = (current, expected, abs(current - expected) <= 1e-9)
+        try:
+            current = _nested_number(robot, path, logical_name)
+        except FieldSetupError:
+            current = None
+        result[logical_name] = (
+            current,
+            expected,
+            current is not None and abs(current - expected) <= 1e-9,
+        )
     for logical_name, path in _DATASET_TIMING_PATHS.items():
-        current = _nested_number(dataset, path, logical_name)
         expected = BALANCED_TIMEOUT_VALUES[logical_name]
-        result[logical_name] = (current, expected, abs(current - expected) <= 1e-9)
+        try:
+            current = _nested_number(dataset, path, logical_name)
+        except FieldSetupError:
+            current = None
+        result[logical_name] = (
+            current,
+            expected,
+            current is not None and abs(current - expected) <= 1e-9,
+        )
     for logical_name, path in _AUTONOMY_TIMING_PATHS.items():
         expected = BALANCED_TIMEOUT_VALUES[logical_name]
         # 旧版 autonomy.local.yaml 可能没有后来增加的字段；配置加载器此时
@@ -981,7 +995,8 @@ def print_balanced_timeout_preview(project_directory: str | Path) -> None:
         project_directory
     ).items():
         marker = "已是目标值" if valid else "将调整"
-        print(f"{logical_name}: {current:.2f}s -> {expected:.2f}s（{marker}）")
+        current_text = "缺失/无效" if current is None else f"{current:.2f}s"
+        print(f"{logical_name}: {current_text} -> {expected:.2f}s（{marker}）")
     print("ArduSub FS_PILOT_TIMEOUT/GCS 失控动作：不读取、不修改")
 
 

@@ -467,7 +467,8 @@ def _write_legacy_local_timeouts(project: Path) -> tuple[bytes, bytes, bytes]:
     dataset = yaml.safe_load(paths.dataset_template.read_text(encoding="utf-8"))
     dataset["safety"]["maximum_telemetry_age_s"] = 0.75
     dataset["safety"]["maximum_status_age_s"] = 2.0
-    dataset["safety"]["maximum_attitude_age_s"] = 3.0
+    # 现场旧文件还可能完全没有后来新增的姿态连续无效阈值。
+    dataset["safety"].pop("maximum_attitude_age_s", None)
     paths.dataset_config.write_text(
         yaml.safe_dump(dataset, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -522,6 +523,11 @@ def test_balanced_timeout_apply_backs_up_updates_and_verifies_local_configs(
 
     before = inspect_balanced_timeouts(project)
     assert before["robot.control.command_timeout_s"][2] is True
+    assert before["dataset.safety.maximum_attitude_age_s"] == (
+        None,
+        5.0,
+        False,
+    )
     assert all(
         not matched
         for name, (_, _, matched) in before.items()
