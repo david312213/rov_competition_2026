@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from rov_competition import dataset_recording as dataset_recording_module
 from rov_competition.dataset_recording import (
     DatasetRecordingError,
     DatasetSessionLogger,
@@ -165,3 +166,24 @@ def test_video_only_session_does_not_claim_unobserved_gamepad_data(
     assert metadata["outcome"] == "completed"
     assert "未观察或记录 QGC 手柄控制量" in metadata["control_note"]
     assert not (session_directory / "events.csv").exists()
+
+
+def test_recording_growth_timeout_uses_relaxed_five_second_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """录像短暂不增长可宽限 5s，但越过边界仍报故障。"""
+
+    class RunningProcess:
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    recorder = RtpMkvRecorder(tmp_path / "session")
+    recorder.process = RunningProcess()  # type: ignore[assignment]
+    recorder._last_growth_at = 100.0
+    monkeypatch.setattr(dataset_recording_module.time, "monotonic", lambda: 105.0)
+    assert recorder.is_stream_fresh()
+
+    monkeypatch.setattr(dataset_recording_module.time, "monotonic", lambda: 105.001)
+    assert not recorder.is_stream_fresh()

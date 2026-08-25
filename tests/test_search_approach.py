@@ -10,9 +10,11 @@ from rov_competition.search_approach import (
     ManualCalibrationControl,
     SearchApproachConfig,
     SearchApproachMission,
+    SearchStateReporter,
     SearchTestError,
     SearchTestState,
     SearchWorkflow,
+    STATE_DISPLAY_NAMES,
     load_search_approach_config,
 )
 
@@ -109,15 +111,17 @@ def lock_and_approach(mission: SearchApproachMission) -> tuple[int, float, Detec
 
 def test_config_matches_rc2_pool_parameters() -> None:
     assert BASE.bottom_detection_stable_s == pytest.approx(3.0)
-    assert BASE.bottom_detection_depth_tolerance_m == pytest.approx(0.02)
+    assert BASE.bottom_detection_depth_tolerance_m == pytest.approx(0.05)
     assert BASE.bottom_detection_minimum_descent_m == pytest.approx(0.10)
-    assert BASE.perception_hold_timeout_s == pytest.approx(0.50)
-    assert BASE.perception_abort_timeout_s == pytest.approx(3.0)
+    assert BASE.perception_hold_timeout_s == pytest.approx(1.0)
+    assert BASE.perception_abort_timeout_s == pytest.approx(5.0)
     assert BASE.scan_yaw_command == pytest.approx(0.20)
     assert BASE.advance_forward_command == pytest.approx(0.40)
     assert BASE.advance_duration_s == pytest.approx(2.0)
     assert BASE.stop_area_ratio == pytest.approx(0.10)
     assert BASE.acquisition_required_hits == 3
+    assert BASE.loss_required_frames == 5
+    assert BASE.loss_confirmation_s == pytest.approx(0.8)
     assert BASE.finish_required_hits == 4
 
 
@@ -202,6 +206,41 @@ def test_depth_plateau_records_bottom_and_enters_scan_neutral() -> None:
     assert "触底" in decision.message
 
 
+def test_state_reporter_prints_entry_one_hz_countdown_and_transition() -> None:
+    """现场终端能看到进入状态、1/3、2/3、3/3 和状态切换。"""
+
+    config = replace(FAST, bottom_detection_stable_s=3.0)
+    mission = SearchApproachMission(config, ("echinus",))
+    first_observation = observation(0, depth=0.20)
+    first = mission.start(first_observation, descent_command=0.60, now=0.0)
+    messages: list[str] = []
+    reporter = SearchStateReporter(mission, emit=messages.append)
+    reporter.report(first, first_observation, 0.0)
+
+    for frame_id, now in ((1, 0.10), (2, 1.10), (3, 2.10), (4, 3.11)):
+        current = observation(frame_id, depth=0.60)
+        decision = mission.step(current, now)
+        reporter.report(decision, current, now)
+
+    assert messages[0].startswith("[进入状态] DESCENDING")
+    assert any("疑似触底稳定=1/3s" in item for item in messages)
+    assert any("疑似触底稳定=2/3s" in item for item in messages)
+    three_index = next(
+        index for index, item in enumerate(messages) if "疑似触底稳定=3/3s" in item
+    )
+    transition_index = next(
+        index
+        for index, item in enumerate(messages)
+        if "[状态切换] DESCENDING -> SCANNING" in item
+    )
+    assert three_index < transition_index
+    assert any(item.startswith("[进入状态] SCANNING") for item in messages)
+
+
+def test_every_search_state_has_a_terminal_display_name() -> None:
+    assert set(STATE_DISPLAY_NAMES) == set(SearchTestState)
+
+
 def test_depth_change_inside_full_window_does_not_false_trigger_bottom() -> None:
     """不能因为相邻读数很小，就把持续慢速下潜当成池底。"""
 
@@ -242,6 +281,17 @@ def test_bottom_detection_accepts_small_pressure_noise() -> None:
     mission.step(observation(1, depth=0.60), 0.01)
     mission.step(observation(2, depth=0.61), 0.11)
     decision = mission.step(observation(3, depth=0.60), 0.22)
+    assert decision.state == SearchTestState.SCANNING
+    assert decision.motion.is_neutral()
+
+
+def test_default_bottom_tolerance_accepts_float32_five_centimeter_span() -> None:
+    config = replace(FAST, bottom_detection_stable_s=0.20)
+    mission = SearchApproachMission(config, ("echinus",))
+    mission.start(observation(0, depth=0.20), descent_command=0.60, now=0.0)
+    mission.step(observation(1, depth=0.600000024), 0.01)
+    mission.step(observation(2, depth=0.649999976), 0.11)
+    decision = mission.step(observation(3, depth=0.610000014), 0.22)
     assert decision.state == SearchTestState.SCANNING
     assert decision.motion.is_neutral()
 
@@ -435,14 +485,34 @@ def test_target_recovery_after_two_misses_realigns() -> None:
     assert decision.motion.is_neutral()
 
 
-def test_three_misses_and_point_three_seconds_confirm_loss() -> None:
+def test_five_misses_and_point_eight_seconds_confirm_loss() -> None:
     mission = started()
     frame, now, _item = lock_and_approach(mission)
-    for elapsed in (0.05, 0.20, 0.31):
+    for elapsed in (0.05, 0.20, 0.40, 0.60, 0.81):
         frame += 1
         decision = mission.step(observation(frame, detections=(), depth=1.30), now + elapsed)
     assert decision.state == SearchTestState.SCANNING
     assert mission.tracked is None
+
+
+def test_loss_requires_both_five_frames_and_point_eight_seconds() -> None:
+    mission = started()
+    frame, now, item = lock_and_approach(mission)
+    # 五帧很快到达，但时间还未达到 0.8 秒，仍保持锁定并停车。
+    for elapsed in (0.05, 0.10, 0.15, 0.20, 0.25):
+        frame += 1
+        decision = mission.step(
+            observation(frame, detections=(), depth=1.30), now + elapsed
+        )
+    assert decision.state == SearchTestState.VERIFYING_LOSS
+    assert mission.tracked == item
+
+    # 时间达到后还必须由一张新帧触发确认。
+    frame += 1
+    decision = mission.step(
+        observation(frame, detections=(), depth=1.30), now + 0.81
+    )
+    assert decision.state == SearchTestState.SCANNING
 
 
 def test_repeated_empty_frame_cannot_confirm_loss() -> None:

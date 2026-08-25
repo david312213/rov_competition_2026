@@ -5,8 +5,39 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
 
 from .config import MissionConfig
+
+
+class PerceptionFreshness(str, Enum):
+    """感知年龄对应的控制动作。"""
+
+    FRESH = "fresh"
+    HOLD = "hold"
+    ABORT = "abort"
+
+
+def classify_perception_age(
+    age_s: float,
+    *,
+    hold_timeout_s: float,
+    abort_timeout_s: float,
+) -> PerceptionFreshness:
+    """把感知年龄分成继续、回中等待和硬中止三个区间。"""
+
+    if (
+        not math.isfinite(hold_timeout_s)
+        or not math.isfinite(abort_timeout_s)
+        or hold_timeout_s <= 0.0
+        or abort_timeout_s <= hold_timeout_s
+    ):
+        raise ValueError("感知软暂停和硬中止阈值不合法")
+    if not math.isfinite(age_s) or age_s < 0.0 or age_s > abort_timeout_s:
+        return PerceptionFreshness.ABORT
+    if age_s > hold_timeout_s:
+        return PerceptionFreshness.HOLD
+    return PerceptionFreshness.FRESH
 
 
 @dataclass(frozen=True)

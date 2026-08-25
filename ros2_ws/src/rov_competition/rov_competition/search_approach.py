@@ -13,7 +13,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 import yaml
 
@@ -59,7 +59,7 @@ class SearchApproachConfig:
     # 深度在 bottom_detection_depth_tolerance_m 范围内连续
     # bottom_detection_stable_s 没有明显变化，才把当前深度记为池底。
     bottom_detection_stable_s: float = 3.0
-    bottom_detection_depth_tolerance_m: float = 0.02
+    bottom_detection_depth_tolerance_m: float = 0.05
     # 至少观察到一小段真实下潜，避免深度传感器从启动起
     # 就卡死时，程序在水面误判“已触底”并开始旋转。
     bottom_detection_minimum_descent_m: float = 0.10
@@ -71,8 +71,8 @@ class SearchApproachConfig:
 
     # 检测帧暂停更新时，状态机会先回中等待；只有连续
     # 超过此时间才把它判定为真正的感知断流并中止任务。
-    perception_hold_timeout_s: float = 0.50
-    perception_abort_timeout_s: float = 3.0
+    perception_hold_timeout_s: float = 1.0
+    perception_abort_timeout_s: float = 5.0
 
     scan_yaw_command: float = 0.20
     scan_angle_deg: float = 360.0
@@ -101,8 +101,8 @@ class SearchApproachConfig:
 
     acquisition_window_frames: int = 5
     acquisition_required_hits: int = 3
-    loss_required_frames: int = 3
-    loss_confirmation_s: float = 0.30
+    loss_required_frames: int = 5
+    loss_confirmation_s: float = 0.80
     finish_window_frames: int = 5
     finish_required_hits: int = 4
     maximum_tracking_jump_ratio: float = 0.25
@@ -327,6 +327,205 @@ class SearchTestDecision:
     outcome: str = "running"
 
 
+STATE_DISPLAY_NAMES = {
+    SearchTestState.IDLE: "等待启动",
+    SearchTestState.DESCENDING: "下潜探底",
+    SearchTestState.SCANNING: "360°扫描",
+    SearchTestState.ADVANCING: "无目标前进",
+    SearchTestState.ALIGNING: "偏航对准",
+    SearchTestState.APPROACHING: "自动接近",
+    SearchTestState.MANUAL_CALIBRATION: "人工抓取标定",
+    SearchTestState.VERIFYING_LOSS: "漏检确认",
+    SearchTestState.RESETTING_FOR_RESCAN: "回到搜索深度",
+    SearchTestState.RETURNING: "回收到启动深度",
+    SearchTestState.COMPLETE: "任务完成",
+    SearchTestState.ABORTED: "任务中止",
+}
+
+
+def _terminal_print(message: str) -> None:
+    """状态日志必须立即刷新，便于现场人员边看边判断。"""
+
+    print(message, flush=True)
+
+
+class SearchStateReporter:
+    """把 20Hz 状态机压缩成进入事件和 1Hz 可读进度。"""
+
+    def __init__(
+        self,
+        mission: "SearchApproachMission",
+        *,
+        emit: Callable[[str], None] = _terminal_print,
+    ) -> None:
+        self._mission = mission
+        self._emit = emit
+        self._last_state: SearchTestState | None = None
+        self._last_progress_at: float | None = None
+        self._last_bottom_second = 0
+        self._terminal_reported = False
+
+    def report(
+        self,
+        decision: SearchTestDecision,
+        observation: MissionObservation,
+        now: float,
+        *,
+        manual_power: float | None = None,
+    ) -> None:
+        """状态变化立即输出，同一状态最多每秒输出一次进度。"""
+
+        state_changed = decision.state != self._last_state
+        if state_changed:
+            if (
+                self._last_state == SearchTestState.DESCENDING
+                and decision.state == SearchTestState.SCANNING
+            ):
+                self._emit(
+                    "[状态进度] DESCENDING | "
+                    f"深度={observation.depth_m:.2f}m | power=0.00 | "
+                    f"疑似触底稳定={int(self._mission.config.bottom_detection_stable_s)}/"
+                    f"{int(self._mission.config.bottom_detection_stable_s)}s | "
+                    f"深度波动={self._mission.bottom_depth_span_m:.3f}m"
+                )
+            if self._last_state is not None:
+                self._emit(
+                    f"[状态切换] {self._last_state.name} -> {decision.state.name} | "
+                    f"{decision.message}"
+                )
+            self._emit(
+                f"[进入状态] {decision.state.name}"
+                f"（{STATE_DISPLAY_NAMES[decision.state]}）| "
+                f"{self._entry_detail(decision, manual_power)}"
+            )
+            self._last_state = decision.state
+            self._last_progress_at = now
+
+        if decision.state == SearchTestState.DESCENDING:
+            current_second = min(
+                int(self._mission.config.bottom_detection_stable_s),
+                int(self._mission.bottom_stable_duration_s + 1e-6),
+            )
+            if current_second < self._last_bottom_second:
+                self._emit(
+                    "[计时重置] DESCENDING | 深度重新变化，"
+                    f"触底稳定计时 {self._last_bottom_second}s -> {current_second}s"
+                )
+            self._last_bottom_second = current_second
+        elif state_changed:
+            self._last_bottom_second = 0
+
+        if decision.state in {SearchTestState.COMPLETE, SearchTestState.ABORTED}:
+            if not self._terminal_reported:
+                prefix = "任务完成" if decision.state == SearchTestState.COMPLETE else "任务中止"
+                self._emit(f"[{prefix}] {decision.message}")
+                self._terminal_reported = True
+            return
+
+        if state_changed:
+            return
+        if self._last_progress_at is not None:
+            if now - self._last_progress_at < 1.0:
+                return
+        self._emit(
+            f"[状态进度] {decision.state.name} | "
+            f"{self._progress_detail(decision, observation, now, manual_power)}"
+        )
+        self._last_progress_at = now
+
+    def _entry_detail(
+        self, decision: SearchTestDecision, manual_power: float | None
+    ) -> str:
+        if decision.state == SearchTestState.DESCENDING:
+            return f"power={self._mission.descent_command:.2f}"
+        if decision.state == SearchTestState.SCANNING:
+            return f"右转 power={self._mission.config.scan_yaw_command:.2f}"
+        if decision.state == SearchTestState.ADVANCING:
+            return (
+                f"前进 power={self._mission.config.advance_forward_command:.2f}, "
+                f"时长={self._mission.config.advance_duration_s:.1f}s"
+            )
+        if decision.state == SearchTestState.MANUAL_CALIBRATION:
+            return f"人工 power={manual_power or self._mission.config.manual_initial_command:.2f}"
+        return decision.message
+
+    def _progress_detail(
+        self,
+        decision: SearchTestDecision,
+        observation: MissionObservation,
+        now: float,
+        manual_power: float | None,
+    ) -> str:
+        elapsed = max(0.0, now - self._mission.state_started_at)
+        state = decision.state
+        if "暂停" in decision.message or "回中等待" in decision.message:
+            return decision.message
+        if state == SearchTestState.DESCENDING:
+            stable = min(
+                self._mission.bottom_stable_duration_s,
+                self._mission.config.bottom_detection_stable_s,
+            )
+            return (
+                f"深度={observation.depth_m:.2f}m | power={abs(decision.motion.vertical):.2f} | "
+                f"疑似触底稳定={int(stable + 1e-6)}/"
+                f"{int(self._mission.config.bottom_detection_stable_s)}s | "
+                f"深度波动={self._mission.bottom_depth_span_m:.3f}m"
+            )
+        if state == SearchTestState.SCANNING:
+            return (
+                f"扫描={self._mission.scan_progress_deg:.1f}/"
+                f"{self._mission.config.scan_angle_deg:.0f}° | "
+                f"轮次={self._mission.search_cycle}/"
+                f"{self._mission.config.maximum_search_cycles} | yaw={decision.motion.yaw:+.2f}"
+            )
+        if state == SearchTestState.ADVANCING:
+            return (
+                f"计时={elapsed:.1f}/{self._mission.config.advance_duration_s:.1f}s | "
+                f"forward={decision.motion.forward:+.2f}"
+            )
+        if state == SearchTestState.ALIGNING:
+            error = decision.horizontal_error
+            return (
+                f"横向误差={'--' if error is None else f'{error:+.3f}'} | "
+                f"稳定帧={self._mission.aligned_frames}/"
+                f"{self._mission.config.alignment_frames} | yaw={decision.motion.yaw:+.2f}"
+            )
+        if state == SearchTestState.APPROACHING:
+            area = decision.target_area_ratio
+            return (
+                f"面积={'--' if area is None else f'{area:.3f}'}/"
+                f"{self._mission.config.stop_area_ratio:.3f} | "
+                f"forward={decision.motion.forward:+.2f} | yaw={decision.motion.yaw:+.2f}"
+            )
+        if state == SearchTestState.VERIFYING_LOSS:
+            since_seen = (
+                0.0
+                if self._mission.last_target_seen_at is None
+                else max(0.0, now - self._mission.last_target_seen_at)
+            )
+            return (
+                f"漏检={self._mission.consecutive_misses}/"
+                f"{self._mission.config.loss_required_frames}帧 | "
+                f"时间={since_seen:.2f}/{self._mission.config.loss_confirmation_s:.2f}s | 已停车"
+            )
+        if state in {SearchTestState.RESETTING_FOR_RESCAN, SearchTestState.RETURNING}:
+            target = decision.target_depth_m
+            settled = 0.0 if self._mission.settled_since is None else now - self._mission.settled_since
+            return (
+                f"深度={observation.depth_m:.2f}m | "
+                f"目标={'--' if target is None else f'{target:.2f}m'} | "
+                f"稳定={max(0.0, settled):.1f}s | vertical={decision.motion.vertical:+.2f}"
+            )
+        if state == SearchTestState.MANUAL_CALIBRATION:
+            area = decision.target_area_ratio
+            return (
+                f"power={manual_power or 0.0:.2f} | "
+                f"框面积={'--' if area is None else f'{area:.3f}'} | "
+                f"误差={'--' if decision.horizontal_error is None else f'{decision.horizontal_error:+.3f}'}"
+            )
+        return f"持续={elapsed:.1f}s | {decision.message}"
+
+
 def _mapping(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise SearchTestError(f"{name} 必须是 YAML 映射")
@@ -374,6 +573,8 @@ class SearchApproachMission:
         self.target_depth_m: float | None = None
         self.descent_command = 0.20
         self.descent_depth_history: deque[tuple[float, float]] = deque()
+        self.bottom_stable_duration_s = 0.0
+        self.bottom_depth_span_m = 0.0
         self.state_started_at = 0.0
         self.settled_since: float | None = None
         self.search_cycle = 0
@@ -421,6 +622,8 @@ class SearchApproachMission:
         self.descent_command = float(descent_command)
         self.descent_depth_history.clear()
         self.descent_depth_history.append((float(now), float(observation.depth_m)))
+        self.bottom_stable_duration_s = 0.0
+        self.bottom_depth_span_m = 0.0
         self.outcome = "running"
         self.last_frame_id = observation.frame_id
         self._clear_target()
@@ -475,7 +678,7 @@ class SearchApproachMission:
         """失去窗口焦点后将所有超时基准向后平移。
 
         暂停期间持续发送中位，不应被计入“前进 2 秒”、扫描超时、
-        漏检 0.30 秒或深度稳定时间。
+        漏检确认时间或深度稳定时间。
         """
 
         if not math.isfinite(paused_duration_s) or paused_duration_s < 0.0:
@@ -600,24 +803,44 @@ class SearchApproachMission:
             and self.descent_depth_history[1][0] <= cutoff
         ):
             self.descent_depth_history.popleft()
-        window_duration_s = max(
-            0.0, now - self.descent_depth_history[0][0]
+        # 从最新样本反向寻找“仍在 0.05m 容差内”的最长连续后缀，
+        # 因而能明确打印稳定 1/3、2/3、3/3 秒；深度重新变化时计时归零。
+        stable_samples: list[tuple[float, float]] = []
+        stable_min = float(observation.depth_m)
+        stable_max = float(observation.depth_m)
+        tolerance = self.config.bottom_detection_depth_tolerance_m
+        for sample_time, depth_m in reversed(self.descent_depth_history):
+            candidate_min = min(stable_min, depth_m)
+            candidate_max = max(stable_max, depth_m)
+            if candidate_max - candidate_min > tolerance + 1e-6:
+                break
+            stable_samples.append((sample_time, depth_m))
+            stable_min = candidate_min
+            stable_max = candidate_max
+        stable_samples.reverse()
+        stable_depths = [depth_m for _, depth_m in stable_samples]
+        stable_duration_s = (
+            max(0.0, now - stable_samples[0][0]) if stable_samples else 0.0
         )
-        window_depths = [depth_m for _, depth_m in self.descent_depth_history]
-        depth_span_m = max(window_depths) - min(window_depths)
+        depth_span_m = stable_max - stable_min
         descended_m = observation.depth_m - self.start_depth_m
+        # 深度遥测是 float32，0.20 -> 0.30 可能计算成
+        # 0.09999999。一个很小的数值容差只用来消除浮点边界误差。
+        comparison_epsilon_m = 1e-6
         enough_descent = (
-            descended_m >= self.config.bottom_detection_minimum_descent_m
+            descended_m + comparison_epsilon_m
+            >= self.config.bottom_detection_minimum_descent_m
         )
+        self.bottom_stable_duration_s = stable_duration_s if enough_descent else 0.0
+        self.bottom_depth_span_m = depth_span_m
         bottom_candidate = (
             enough_descent
-            and window_duration_s >= self.config.bottom_detection_stable_s
-            and depth_span_m <= self.config.bottom_detection_depth_tolerance_m
+            and stable_duration_s >= self.config.bottom_detection_stable_s
         )
         if bottom_candidate:
             # 记下实测触底深度。进入扫描前先回中，不让推进器
             # 在状态切换的这一帧继续向池底施力。
-            sorted_depths = sorted(window_depths)
+            sorted_depths = sorted(stable_depths)
             middle = len(sorted_depths) // 2
             if len(sorted_depths) % 2:
                 bottom_depth_m = sorted_depths[middle]
@@ -652,7 +875,7 @@ class SearchApproachMission:
             MotionCommand(vertical=vertical),
             observation,
             f"下潜探底：深度 {observation.depth_m:.2f} m，{progress_note}，"
-            f"窗口 {window_duration_s:.1f}/{self.config.bottom_detection_stable_s:.1f}s，"
+            f"稳定 {self.bottom_stable_duration_s:.1f}/{self.config.bottom_detection_stable_s:.1f}s，"
             f"变化 {depth_span_m:.3f}/{self.config.bottom_detection_depth_tolerance_m:.3f}m",
         )
 
@@ -887,8 +1110,18 @@ class SearchApproachMission:
                 return self.request_normal_finish(observation, now, "目标确认丢失且搜索轮数用尽，回收")
             self.search_cycle += 1
             self._enter(SearchTestState.SCANNING, observation, now)
-            return self._decision(MotionCommand.neutral(), observation, "连续3帧且超过0.30秒未匹配，确认丢失并重新扫描")
-        return self._decision(MotionCommand.neutral(), observation, f"目标暂时漏检 {self.consecutive_misses}/3，立即停车确认")
+            return self._decision(
+                MotionCommand.neutral(),
+                observation,
+                f"连续{self.config.loss_required_frames}帧且超过"
+                f"{self.config.loss_confirmation_s:.2f}秒未匹配，确认丢失并重新扫描",
+            )
+        return self._decision(
+            MotionCommand.neutral(),
+            observation,
+            f"目标暂时漏检 {self.consecutive_misses}/"
+            f"{self.config.loss_required_frames}，立即停车确认",
+        )
 
     def _largest_allowed(self, observation: MissionObservation) -> Detection | None:
         candidates = [

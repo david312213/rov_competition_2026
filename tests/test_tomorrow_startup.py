@@ -15,7 +15,15 @@ ROS_CHECK = PROJECT / "scripts/check_ros.sh"
 
 def test_tomorrow_wizard_exposes_menu_and_every_named_subcommand() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
-    for command in ("status", "qgc", "gripper", "weights", "search", "calibrate"):
+    for command in (
+        "status",
+        "qgc",
+        "gripper",
+        "weights",
+        "timing",
+        "search",
+        "calibrate",
+    ):
         assert f"{command})" in source
     assert "start_gripper_test.sh" in source
     assert "start_search_approach_test.sh" in source
@@ -24,6 +32,7 @@ def test_tomorrow_wizard_exposes_menu_and_every_named_subcommand() -> None:
     assert "ACTIVATE RST GRIPPER" in source
     assert "INSTALL NEW WEIGHT" in source
     assert "ROLLBACK WEIGHT" in source
+    assert "APPLY BALANCED TIMEOUTS" in source
 
 
 def test_tomorrow_help_runs_without_ros_or_hardware() -> None:
@@ -37,6 +46,7 @@ def test_tomorrow_help_runs_without_ros_or_hardware() -> None:
     assert completed.returncode == 0
     assert "start_tomorrow_test.sh qgc" in completed.stdout
     assert "start_tomorrow_test.sh calibrate" in completed.stdout
+    assert "start_tomorrow_test.sh timing" in completed.stdout
 
 
 def test_qgc_stage_documents_defaults_and_never_kills_qgc() -> None:
@@ -68,6 +78,18 @@ def test_search_and_video_prefer_local_weight_configuration() -> None:
     assert 'RUNTIME_MODE="auto"' in search
     assert 'RUNTIME_MODE="manual"' in search
     assert 'robot_config:="${RUNTIME_ROBOT_CONFIG}"' in search
+
+
+def test_search_starts_annotated_viewer_before_motion_test() -> None:
+    source = SEARCH.read_text(encoding="utf-8")
+    assert "ros-humble-rqt-image-view" in source
+    assert '"/rov/annotated_image compressed"' in source
+    assert "/rov/annotated_image/compressed" in source
+    assert "VIEWER_PID" in source
+    assert "annotated_viewer.log" in source
+    assert source.index("ros2 run rqt_image_view rqt_image_view") < source.index(
+        "ros2 run rov_competition rov_search_approach_test"
+    )
 
 
 def test_ros_check_requires_new_cli_and_master_script() -> None:

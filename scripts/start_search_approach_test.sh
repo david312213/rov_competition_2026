@@ -32,6 +32,7 @@ WORKFLOW="auto_approach"
 GATEWAY_PID=""
 BRIDGE_PID=""
 PERCEPTION_PID=""
+VIEWER_PID=""
 CLEANED_UP=false
 
 usage() {
@@ -84,6 +85,7 @@ cleanup() {
   CLEANED_UP=true
   trap - EXIT INT TERM
   # 前台测试节点已经先回中并上锁/急停。
+  stop_owned_process "${VIEWER_PID}" "YOLO 带框查看器"
   stop_owned_process "${PERCEPTION_PID}" "YOLO 感知"
   stop_owned_process "${BRIDGE_PID}" "视频分流器"
   stop_owned_process "${GATEWAY_PID}" "飞控网关"
@@ -124,6 +126,15 @@ fi
 for command in python ros2 gst-launch-1.0 ffprobe ss ping ip timeout; do
   command -v "${command}" >/dev/null 2>&1 || { echo "缺少命令 ${command}" >&2; exit 1; }
 done
+if ! ros2 pkg prefix rqt_image_view >/dev/null 2>&1; then
+  echo "缺少 YOLO 带框查看器 rqt_image_view。" >&2
+  echo "请先执行：sudo apt install ros-humble-rqt-image-view" >&2
+  exit 1
+fi
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+  echo "当前没有图形桌面环境，无法打开 YOLO 带框查看器。" >&2
+  exit 1
+fi
 
 python - <<'PY'
 import cv2
@@ -252,6 +263,28 @@ if ! timeout 45 bash -c 'until ros2 node list 2>/dev/null | grep -qx /rov_search
   tail -n 100 "${SESSION_DIR}/logs/perception.log" >&2 || true
   exit 1
 fi
+
+# rqt_image_view 的插件参数使用“基础话题 传输方式”。直接选中
+# compressed，避免队员每次手工选择话题，也避免把 transport-specific
+# 话题当成普通 Image 话题订阅。
+if ! timeout 30 bash -c \
+  'until ros2 topic list 2>/dev/null | grep -qx /rov/annotated_image/compressed; do sleep 0.25; done'; then
+  echo "30 秒内未发现 YOLO 带框图像话题。" >&2
+  tail -n 100 "${SESSION_DIR}/logs/perception.log" >&2 || true
+  exit 1
+fi
+ros2 run rqt_image_view rqt_image_view \
+  "/rov/annotated_image compressed" \
+  >"${SESSION_DIR}/logs/annotated_viewer.log" 2>&1 &
+VIEWER_PID=$!
+sleep 2
+if ! kill -0 "${VIEWER_PID}" 2>/dev/null; then
+  echo "YOLO 带框查看器启动失败。" >&2
+  tail -n 100 "${SESSION_DIR}/logs/annotated_viewer.log" >&2 || true
+  exit 1
+fi
+echo "YOLO 带框画面已自动打开：/rov/annotated_image (compressed)"
+echo "QGC 继续显示 5600 原始画面；关闭带框窗口不会中止任务。"
 
 set +e
 ros2 run rov_competition rov_search_approach_test \

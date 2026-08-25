@@ -309,6 +309,7 @@ def test_command_timeout_and_non_finite_input_are_detected() -> None:
     vehicle, master = make_vehicle(live=True)
     vehicle._telemetry.armed = True
     vehicle.send_motion(MotionCommand(forward=0.05), now=5.0)
+    assert not vehicle.command_timed_out(5.0 + vehicle.config.command_timeout_s)
     assert vehicle.command_timed_out(5.0 + vehicle.config.command_timeout_s + 0.01)
     with pytest.raises(VehicleError, match="非法"):
         vehicle.send_motion(MotionCommand(forward=float("nan")), now=6.0)

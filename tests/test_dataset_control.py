@@ -163,7 +163,7 @@ def test_fake_gateway_accepts_clean_prearm_and_active_states() -> None:
     ("changes", "message"),
     [
         ({"telemetry_age_s": 2.0}, "遥测数据过期 2.00s"),
-        ({"status_age_s": 2.1}, "控制状态过期 2.10s"),
+        ({"status_age_s": 3.1}, "控制状态过期 3.10s"),
         ({"telemetry_mode": "MANUAL"}, "ALT_HOLD"),
         ({"estop_latched": True}, "急停"),
         ({"command_source": "autonomy"}, "命令来源"),
@@ -190,10 +190,10 @@ def test_short_attitude_dropout_is_tolerated_but_long_dropout_stops() -> None:
     """偶发姿态丢包不打断采集，连续超时仍返回明确原因。"""
 
     config = _config()
-    brief = _snapshot(attitude_valid=False, attitude_age_s=2.9)
+    brief = _snapshot(attitude_valid=False, attitude_age_s=4.9)
     assert prearm_safety_error(brief, config) is None
 
-    stale = _snapshot(attitude_valid=False, attitude_age_s=3.1)
+    stale = _snapshot(attitude_valid=False, attitude_age_s=5.1)
     error = prearm_safety_error(stale, config)
     assert error is not None
     assert "姿态遥测连续无效" in error

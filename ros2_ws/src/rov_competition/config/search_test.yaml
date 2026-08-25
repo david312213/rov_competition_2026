@@ -1,7 +1,7 @@
 # 0.2.0rc2 搜索—接近水池测试参数
 #
 # 启动时只输入固定下潜 power，不再输入目标深度。
-# 程序持续下潜，当最近 3 秒的深度变化不超过 0.02m 时，
+# 程序持续下潜，当最近 3 秒的深度变化不超过 0.05m 时，
 # 记录当前深度为本轮搜索深度并进入扫描。
 
 search_test:
@@ -9,7 +9,7 @@ search_test:
   # 换水池后必须按实际场地审核，不要把它当成池底深度。
   maximum_operation_depth_m: 20.0
   bottom_detection_stable_s: 3.0
-  bottom_detection_depth_tolerance_m: 0.02
+  bottom_detection_depth_tolerance_m: 0.05
   bottom_detection_minimum_descent_m: 0.10
 
   # 下列参数仍用于人工标定中按 R 后回到本轮搜索深度。
@@ -22,8 +22,8 @@ search_test:
 
   # 检测帧超过 hold 时间未更新就回中，但容忍偶发解码卡顿；
   # 只有连续超过 abort 时间才中止整个任务。
-  perception_hold_timeout_s: 0.50
-  perception_abort_timeout_s: 3.0
+  perception_hold_timeout_s: 1.0
+  perception_abort_timeout_s: 5.0
 
   # 键2对应的向右偏航方向。
   scan_yaw_command: 0.20
@@ -54,8 +54,8 @@ search_test:
 
   acquisition_window_frames: 5
   acquisition_required_hits: 3
-  loss_required_frames: 3
-  loss_confirmation_s: 0.30
+  loss_required_frames: 5
+  loss_confirmation_s: 0.80
   finish_window_frames: 5
   finish_required_hits: 4
   maximum_tracking_jump_ratio: 0.25

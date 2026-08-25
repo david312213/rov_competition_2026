@@ -13,10 +13,14 @@ import yaml
 
 from rov_competition import field_setup as field_setup_module
 from rov_competition.field_setup import (
+    BALANCED_TIMEOUT_CONFIRMATION,
+    BALANCED_TIMEOUT_VALUES,
     FieldSetupError,
     WeightInspection,
     activate_gripper,
+    apply_balanced_timeouts,
     field_paths,
+    inspect_balanced_timeouts,
     inspect_weight,
     install_weight,
     main,
@@ -24,6 +28,7 @@ from rov_competition.field_setup import (
     sha256_file,
     validate_gripper_result,
     verify_active_weight,
+    verify_balanced_timeouts,
     verify_gripper_activation,
     write_runtime_robot_config,
 )
@@ -33,6 +38,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 PACKAGE = PROJECT / "ros2_ws/src/rov_competition"
 ROBOT_EXAMPLE = PACKAGE / "config/robot.example.yaml"
 AUTONOMY_EXAMPLE = PACKAGE / "config/autonomy.yaml"
+DATASET_EXAMPLE = PACKAGE / "config/dataset.example.yaml"
 TARGETS = ("echinus", "holothurian", "scallop", "starfish")
 
 
@@ -48,6 +54,7 @@ def _make_project(tmp_path: Path) -> Path:
     (package / "models").mkdir(parents=True)
     shutil.copy2(ROBOT_EXAMPLE, project / "config/robot.yaml")
     shutil.copy2(AUTONOMY_EXAMPLE, package / "config/autonomy.yaml")
+    shutil.copy2(DATASET_EXAMPLE, package / "config/dataset.example.yaml")
     return project
 
 
@@ -440,3 +447,114 @@ def test_passed_rst_activation_upgrades_legacy_robot_config_with_backup(
     assert upgraded["safety"]["allow_gripper_actuation"] is True
     valid, reason = verify_gripper_activation(project)
     assert valid, reason
+
+
+def _write_legacy_local_timeouts(project: Path) -> tuple[bytes, bytes]:
+    """写入现场旧阈值，用于验证 Git 忽略配置的迁移。"""
+
+    paths = field_paths(project)
+    robot = yaml.safe_load(paths.robot_config.read_text(encoding="utf-8"))
+    robot["mavlink"]["heartbeat_stale_timeout_s"] = 1.5
+    robot["mavlink"]["telemetry_stale_timeout_s"] = 1.0
+    robot["control"]["maximum_command_age_s"] = 0.25
+    robot["control"]["command_timeout_s"] = 0.5
+    robot["safety"]["maximum_pilot_input_timeout_s"] = 3.0
+    paths.robot_config.write_text(
+        yaml.safe_dump(robot, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    dataset = yaml.safe_load(paths.dataset_template.read_text(encoding="utf-8"))
+    dataset["safety"]["maximum_telemetry_age_s"] = 0.75
+    dataset["safety"]["maximum_status_age_s"] = 2.0
+    dataset["safety"]["maximum_attitude_age_s"] = 3.0
+    paths.dataset_config.write_text(
+        yaml.safe_dump(dataset, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return paths.robot_config.read_bytes(), paths.dataset_config.read_bytes()
+
+
+def test_balanced_timeout_apply_requires_exact_confirmation_and_keeps_files(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    original_robot, original_dataset = _write_legacy_local_timeouts(project)
+    paths = field_paths(project)
+
+    with pytest.raises(FieldSetupError, match="确认词"):
+        apply_balanced_timeouts(project, confirmation="APPLY")
+
+    assert paths.robot_config.read_bytes() == original_robot
+    assert paths.dataset_config.read_bytes() == original_dataset
+    assert not paths.timing_record.exists()
+
+
+def test_balanced_timeout_apply_backs_up_updates_and_verifies_local_configs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = _make_project(tmp_path)
+    original_robot, original_dataset = _write_legacy_local_timeouts(project)
+    paths = field_paths(project)
+
+    before = inspect_balanced_timeouts(project)
+    assert before["robot.control.command_timeout_s"][2] is True
+    assert all(
+        not matched
+        for name, (_, _, matched) in before.items()
+        if name != "robot.control.command_timeout_s"
+    )
+
+    record = apply_balanced_timeouts(
+        project,
+        confirmation=BALANCED_TIMEOUT_CONFIRMATION,
+    )
+
+    robot_backup = Path(str(record["robot_backup"]))
+    dataset_backup = Path(str(record["dataset_backup"]))
+    assert robot_backup.read_bytes() == original_robot
+    assert dataset_backup.read_bytes() == original_dataset
+    assert paths.timing_record.is_file()
+    assert record["values"] == BALANCED_TIMEOUT_VALUES
+    assert record["unchanged_flight_controller_parameters"] == [
+        "FS_PILOT_TIMEOUT",
+        "FS_PILOT_INPUT",
+        "FS_GCS_ENABLE",
+    ]
+
+    after = inspect_balanced_timeouts(project)
+    assert all(matched for _, _, matched in after.values())
+    valid, reason = verify_balanced_timeouts(project)
+    assert valid, reason
+
+    robot = yaml.safe_load(paths.robot_config.read_text(encoding="utf-8"))
+    assert robot["control"]["command_timeout_s"] == pytest.approx(0.5)
+    assert robot["safety"]["maximum_pilot_input_timeout_s"] == pytest.approx(3.0)
+
+    assert main(["--project-dir", str(project), "status"]) == 0
+    assert "timing: OK" in capsys.readouterr().out
+
+
+def test_balanced_timeout_failed_verification_rolls_back_both_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _make_project(tmp_path)
+    original_robot, original_dataset = _write_legacy_local_timeouts(project)
+    paths = field_paths(project)
+
+    monkeypatch.setattr(
+        field_setup_module,
+        "verify_balanced_timeouts",
+        lambda _project: (False, "模拟校验失败"),
+    )
+    with pytest.raises(FieldSetupError, match="模拟校验失败"):
+        apply_balanced_timeouts(
+            project,
+            confirmation=BALANCED_TIMEOUT_CONFIRMATION,
+        )
+
+    assert paths.robot_config.read_bytes() == original_robot
+    assert paths.dataset_config.read_bytes() == original_dataset
+    assert not paths.timing_record.exists()

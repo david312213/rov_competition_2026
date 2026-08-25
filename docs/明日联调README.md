@@ -1,6 +1,6 @@
 # 0.2.0rc2 明日联调一键向导
 
-> 本文是明天现场操作的唯一主入口。不要把五个阶段一次性无人值守运行。
+> 本文是明天现场操作的唯一主入口。不要把六个阶段一次性无人值守运行。
 
 ## 0. 拉取、构建和检查
 
@@ -141,7 +141,33 @@ INSTALL NEW WEIGHT
 确认词是 `ROLLBACK WEIGHT`。权重和对应的类别/哈希配置会一起交换，
 不会只回滚其中一个。
 
-## 4. 先测自动搜索、对准和接近
+## 4. 为旧电脑应用平衡型超时
+
+`config/robot.yaml` 和 `config/dataset.yaml` 被 Git 忽略，所以 `git pull`
+不会替你更新这两份实艇配置。执行：
+
+```bash
+./scripts/start_tomorrow_test.sh timing
+```
+
+向导会显示每个旧值和新值，然后要求完整输入：
+
+```text
+APPLY BALANCED TIMEOUTS
+```
+
+它会先在 `config/` 中生成带时间的备份，再原子写入新阈值并
+重新加载校验。该阶段不连接飞控，不修改 `FS_PILOT_TIMEOUT`、
+GCS 失控动作或任何 ArduSub 参数。`0.5 s` 运动发布者失联停车也保持
+不变。随后可用下列命令复查：
+
+```bash
+./scripts/start_tomorrow_test.sh status
+```
+
+状态中出现 `timing: OK` 才表示这台电脑的本地配置已迁移。
+
+## 5. 先测自动搜索、对准和接近
 
 ```bash
 ./scripts/start_tomorrow_test.sh search
@@ -158,7 +184,7 @@ INSTALL NEW WEIGHT
 即使第 2 步已经启用机械爪，这个入口也会在本次会话的
 `resolved_robot.yaml` 中强制关闭爪子权限，因此自动接近测试不会闭爪。
 
-## 5. 人工抓取位置标定
+## 6. 人工抓取位置标定
 
 ```bash
 ./scripts/start_tomorrow_test.sh calibrate

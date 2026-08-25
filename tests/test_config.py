@@ -26,8 +26,9 @@ def test_dataset_template_has_no_software_depth_limit() -> None:
     dataset = load_dataset_config(DATASET_EXAMPLE)
     assert dataset.initial_command == pytest.approx(0.20)
     assert dataset.maximum_command == pytest.approx(0.80)
-    assert dataset.maximum_attitude_age_s == pytest.approx(3.0)
-    assert dataset.maximum_status_age_s == pytest.approx(2.0)
+    assert dataset.maximum_telemetry_age_s == pytest.approx(1.5)
+    assert dataset.maximum_attitude_age_s == pytest.approx(5.0)
+    assert dataset.maximum_status_age_s == pytest.approx(3.0)
     errors = dataset.readiness_errors(load_robot_config(ROBOT_EXAMPLE))
     assert not any("深度" in error or "depth" in error.lower() for error in errors)
     assert "depth_safety" not in DATASET_EXAMPLE.read_text(encoding="utf-8")
@@ -36,15 +37,15 @@ def test_dataset_template_has_no_software_depth_limit() -> None:
 def test_legacy_dataset_status_timeout_is_raised_to_desktop_minimum(
     tmp_path: Path,
 ) -> None:
-    """旧现场配置的 0.75 秒阈值也应自动获得 2 秒调度余量。"""
+    """旧现场配置的 0.75 秒阈值也应自动获得 3 秒调度余量。"""
 
     source = DATASET_EXAMPLE.read_text(encoding="utf-8")
     legacy = tmp_path / "dataset.yaml"
     legacy.write_text(
-        source.replace("maximum_status_age_s: 2.0", "maximum_status_age_s: 0.75"),
+        source.replace("maximum_status_age_s: 3.0", "maximum_status_age_s: 0.75"),
         encoding="utf-8",
     )
-    assert load_dataset_config(legacy).maximum_status_age_s == pytest.approx(2.0)
+    assert load_dataset_config(legacy).maximum_status_age_s == pytest.approx(3.0)
 
 
 def test_example_robot_configuration_is_safe_and_explicit() -> None:
@@ -59,6 +60,10 @@ def test_example_robot_configuration_is_safe_and_explicit() -> None:
     assert config.control_protocol == ControlProtocol.MANUAL_CONTROL
     assert config.control_profile == ControlProfile.COMMISSIONING
     assert config.command_limit == pytest.approx(0.80)
+    assert config.heartbeat_stale_timeout_s == pytest.approx(2.5)
+    assert config.telemetry_stale_timeout_s == pytest.approx(2.0)
+    assert config.maximum_command_age_s == pytest.approx(0.5)
+    assert config.command_timeout_s == pytest.approx(0.5)
     assert config.gripper.profile == "dalian"
     assert config.gripper.output_channels == (12,)
     assert config.gripper.calibrated is False
@@ -168,6 +173,13 @@ def test_autonomy_model_path_and_hash_are_stable() -> None:
     assert config.mission.descent_delta_m == pytest.approx(0.30)
     assert config.mission.advance_target_distance_m == pytest.approx(0.40)
     assert config.mission.advance_duration_s == pytest.approx(4.0 / 3.0)
+    assert config.mission.target_lost_timeout_s == pytest.approx(1.5)
+    assert config.mission.reacquire_grace_s == pytest.approx(1.0)
+    assert config.mission.maximum_heartbeat_age_s == pytest.approx(2.5)
+    assert config.mission.maximum_message_age_s == pytest.approx(1.5)
+    assert config.mission.perception_hold_timeout_s == pytest.approx(1.0)
+    assert config.mission.maximum_perception_age_s == pytest.approx(5.0)
+    assert config.mission.maximum_control_status_age_s == pytest.approx(3.0)
     assert set(config.mission.grasp_area_ratios) == {
         "echinus",
         "holothurian",

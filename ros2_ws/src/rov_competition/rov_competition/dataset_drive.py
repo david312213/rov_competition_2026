@@ -544,7 +544,7 @@ def _run_keyboard_loop(
         error = _active_error(node, config)
         if error is not None:
             raise DatasetDriveError(error)
-        if not recorder.is_stream_fresh(maximum_idle_s=3.0):
+        if not recorder.is_stream_fresh(maximum_idle_s=5.0):
             # 录像失效时先回中；上层只在深度可用时执行回收。
             return "recording_fault", "原始视频录像停止增长"
 

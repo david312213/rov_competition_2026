@@ -22,6 +22,7 @@ usage() {
   ./scripts/start_tomorrow_test.sh qgc
   ./scripts/start_tomorrow_test.sh gripper [dalian|rst]
   ./scripts/start_tomorrow_test.sh weights [rollback]
+  ./scripts/start_tomorrow_test.sh timing
   ./scripts/start_tomorrow_test.sh search
   ./scripts/start_tomorrow_test.sh calibrate
 
@@ -279,6 +280,26 @@ manage_weights() {
     --confirmation "${confirmation}" --execute
 }
 
+apply_balanced_timing() {
+  load_project_environment
+  printf '%s\n' \
+    '这个阶段只更新本机 Git 忽略的 robot.yaml 和 dataset.yaml：' \
+    '  - 放宽通信、遥测和感知抖动阈值' \
+    '  - 保持 0.50s 运动发布者看门狗' \
+    '  - 不连接飞控，不修改任何 ArduSub 参数'
+  field_setup timing preview
+  local confirmation
+  read -r -p \
+    "确认备份并应用，完整输入 APPLY BALANCED TIMEOUTS: " confirmation
+  if [[ "${confirmation}" != 'APPLY BALANCED TIMEOUTS' ]]; then
+    printf '已取消；本地配置没有改变。\n'
+    return 0
+  fi
+  field_setup timing apply \
+    --confirmation "${confirmation}" --execute
+  field_setup timing verify
+}
+
 run_search() {
   load_project_environment
   exec "${SCRIPT_DIR}/start_search_approach_test.sh"
@@ -297,6 +318,7 @@ dispatch() {
     qgc) configure_qgc ;;
     gripper) test_and_activate_gripper "${1:-}" ;;
     weights) manage_weights "${1:-install}" ;;
+    timing) apply_balanced_timing ;;
     search) run_search ;;
     calibrate) run_calibration ;;
     -h|--help|help) usage ;;
@@ -316,18 +338,20 @@ while true; do
     '  2) 恢复并验证 QGC + BlueOS 默认端口' \
     '  3) 测试并启用机械爪候选档案' \
     '  4) 验证并替换新权重' \
-    '  5) 运行自动搜索—对准—接近（不动爪子）' \
-    '  6) 运行搜索—对准—人工抓取标定' \
+    '  5) 应用平衡型超时（不连接飞控）' \
+    '  6) 运行自动搜索—对准—接近（不动爪子）' \
+    '  7) 运行搜索—对准—人工抓取标定' \
     '  0) 退出'
-  read -r -p "请选择 [0-6]: " choice
+  read -r -p "请选择 [0-7]: " choice
   case "${choice}" in
     1) dispatch status ;;
     2) dispatch qgc ;;
     3) dispatch gripper ;;
     4) dispatch weights ;;
-    5) dispatch search ;;
-    6) dispatch calibrate ;;
+    5) dispatch timing ;;
+    6) dispatch search ;;
+    7) dispatch calibrate ;;
     0) exit 0 ;;
-    *) printf '请输入 0到6。\n' ;;
+    *) printf '请输入 0到7。\n' ;;
   esac
 done

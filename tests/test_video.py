@@ -66,15 +66,15 @@ def test_old_mpegts_url_remains_available_for_compatibility() -> None:
     ("live_stream", "mission_active", "expected"),
     [
         (True, False, True),
-        (True, True, False),
+        (True, True, True),
         (False, False, False),
         (False, True, False),
     ],
 )
-def test_only_inactive_live_video_may_retry(
+def test_live_video_may_retry_while_control_loop_enforces_staleness(
     live_stream: bool, mission_active: bool, expected: bool
 ) -> None:
-    """只读 RTP 测试可恢复，活动任务和录像结束必须保持安全失败。"""
+    """直播可重建解码器；录像结束不可伪装为新画面。"""
 
     assert (
         should_retry_live_video_interruption(

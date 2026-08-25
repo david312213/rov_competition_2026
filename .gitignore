@@ -17,6 +17,7 @@ config/robot.yaml
 config/robot.yaml.*
 config/robot_old_reference.yaml
 config/dataset.yaml
+config/dataset.yaml.*
 ros2_ws/src/rov_competition/config/robot.yaml
 *.local.yaml
 

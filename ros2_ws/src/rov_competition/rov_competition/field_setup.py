@@ -1,10 +1,11 @@
 """明日联调向导使用的本地配置事务。
 
-本模块不启动 ROS 节点，也不直接控制飞控。它只处理三类可审计的本地操作：
+本模块不启动 ROS 节点，也不直接控制飞控。它只处理四类可审计的本地操作：
 
 * 验证、安装和回滚 YOLO 权重；
 * 根据机械爪台架测试证据启用唯一的机械爪档案；
 * 为自动接近或人工标定生成本次会话专用的机器人配置。
+* 备份并更新本机 Git 忽略的平衡型超时配置。
 
 所有现场配置和权重都被 ``.gitignore`` 排除，不会误提交到仓库。
 """
@@ -41,6 +42,16 @@ GRIPPER_ACTIVATION_CONFIRMATIONS = {
     "dalian": "ACTIVATE DALIAN GRIPPER",
     "rst": "ACTIVATE RST GRIPPER",
 }
+BALANCED_TIMEOUT_CONFIRMATION = "APPLY BALANCED TIMEOUTS"
+BALANCED_TIMEOUT_VALUES = {
+    "robot.mavlink.heartbeat_stale_timeout_s": 2.5,
+    "robot.mavlink.telemetry_stale_timeout_s": 2.0,
+    "robot.control.maximum_command_age_s": 0.5,
+    "robot.control.command_timeout_s": 0.5,
+    "dataset.safety.maximum_telemetry_age_s": 1.5,
+    "dataset.safety.maximum_status_age_s": 3.0,
+    "dataset.safety.maximum_attitude_age_s": 5.0,
+}
 
 
 class FieldSetupError(RuntimeError):
@@ -53,6 +64,8 @@ class FieldPaths:
 
     project: Path
     robot_config: Path
+    dataset_config: Path
+    dataset_template: Path
     source_autonomy: Path
     local_autonomy: Path
     previous_autonomy: Path
@@ -61,6 +74,7 @@ class FieldPaths:
     weight_record: Path
     gripper_record: Path
     gripper_results: Path
+    timing_record: Path
 
 
 @dataclass(frozen=True)
@@ -94,6 +108,8 @@ def field_paths(project_directory: str | Path) -> FieldPaths:
     return FieldPaths(
         project=project,
         robot_config=project / "config/robot.yaml",
+        dataset_config=project / "config/dataset.yaml",
+        dataset_template=package / "config/dataset.example.yaml",
         source_autonomy=package / "config/autonomy.yaml",
         local_autonomy=project / "config/autonomy.local.yaml",
         previous_autonomy=project / "config/autonomy.previous.local.yaml",
@@ -102,6 +118,7 @@ def field_paths(project_directory: str | Path) -> FieldPaths:
         weight_record=project / "config/weight_activation.local.yaml",
         gripper_record=project / "config/gripper_activation.local.yaml",
         gripper_results=project / "output/gripper_tests",
+        timing_record=project / "config/timing_activation.local.yaml",
     )
 
 
@@ -597,7 +614,7 @@ def activate_gripper(
         profiles = _mapping(raw_profiles, "gripper.profiles")
     selected = _mapping(profiles.get(profile), f"gripper.profiles.{profile}")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     backup = paths.robot_config.with_name(f"robot.yaml.before-gripper-{timestamp}")
     if backup.exists():
         backup = backup.with_name(f"{backup.name}-{os.getpid()}")
@@ -721,6 +738,166 @@ def write_runtime_robot_config(
     return enabled, reason
 
 
+_ROBOT_TIMING_PATHS = {
+    "robot.mavlink.heartbeat_stale_timeout_s": ("mavlink", "heartbeat_stale_timeout_s"),
+    "robot.mavlink.telemetry_stale_timeout_s": ("mavlink", "telemetry_stale_timeout_s"),
+    "robot.control.maximum_command_age_s": ("control", "maximum_command_age_s"),
+    "robot.control.command_timeout_s": ("control", "command_timeout_s"),
+}
+_DATASET_TIMING_PATHS = {
+    "dataset.safety.maximum_telemetry_age_s": ("safety", "maximum_telemetry_age_s"),
+    "dataset.safety.maximum_status_age_s": ("safety", "maximum_status_age_s"),
+    "dataset.safety.maximum_attitude_age_s": ("safety", "maximum_attitude_age_s"),
+}
+
+
+def _nested_number(
+    value: Mapping[str, Any], path: tuple[str, str], logical_name: str
+) -> float:
+    section = _mapping(value.get(path[0]), path[0])
+    try:
+        number = float(section[path[1]])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise FieldSetupError(f"{logical_name} 缺失或不是数字") from exc
+    return number
+
+
+def _set_nested_number(
+    value: dict[str, Any], path: tuple[str, str], number: float
+) -> None:
+    section = _mapping(value.get(path[0]), path[0])
+    section[path[1]] = float(number)
+    value[path[0]] = section
+
+
+def _timing_source_data(paths: FieldPaths) -> tuple[dict[str, Any], dict[str, Any]]:
+    robot = _read_yaml(paths.robot_config, "实艇配置")
+    dataset_source = (
+        paths.dataset_config if paths.dataset_config.is_file() else paths.dataset_template
+    )
+    dataset = _read_yaml(dataset_source, "数据采集配置")
+    return robot, dataset
+
+
+def inspect_balanced_timeouts(
+    project_directory: str | Path,
+) -> dict[str, tuple[float, float, bool]]:
+    """返回本地值、目标值及是否已经匹配；不修改任何文件。"""
+
+    paths = field_paths(project_directory)
+    robot, dataset = _timing_source_data(paths)
+    result: dict[str, tuple[float, float, bool]] = {}
+    for logical_name, path in _ROBOT_TIMING_PATHS.items():
+        current = _nested_number(robot, path, logical_name)
+        expected = BALANCED_TIMEOUT_VALUES[logical_name]
+        result[logical_name] = (current, expected, abs(current - expected) <= 1e-9)
+    for logical_name, path in _DATASET_TIMING_PATHS.items():
+        current = _nested_number(dataset, path, logical_name)
+        expected = BALANCED_TIMEOUT_VALUES[logical_name]
+        result[logical_name] = (current, expected, abs(current - expected) <= 1e-9)
+    return result
+
+
+def verify_balanced_timeouts(
+    project_directory: str | Path,
+) -> tuple[bool, str]:
+    """重新加载两份配置，并确认平衡阈值和关键 0.5s 看门狗。"""
+
+    paths = field_paths(project_directory)
+    if not paths.dataset_config.is_file():
+        return False, f"缺少本地数据采集配置: {paths.dataset_config}"
+    try:
+        values = inspect_balanced_timeouts(project_directory)
+        mismatched = [name for name, (_, _, valid) in values.items() if not valid]
+        if mismatched:
+            return False, "尚未应用平衡阈值: " + ", ".join(mismatched)
+        from .config import load_dataset_config, load_robot_config
+
+        robot = load_robot_config(paths.robot_config)
+        dataset = load_dataset_config(paths.dataset_config)
+        if abs(robot.command_timeout_s - 0.5) > 1e-9:
+            return False, "运动发布者消失看门狗不是 0.50s"
+        if abs(robot.maximum_pilot_input_timeout_s - 3.0) > 1e-9:
+            return False, "FS_PILOT_TIMEOUT 预检期望值不是 3.0s，未自动修改"
+        if abs(dataset.maximum_status_age_s - 3.0) > 1e-9:
+            return False, "数据采集控制状态阈值没有生效"
+    except (FieldSetupError, OSError, ValueError) as exc:
+        return False, str(exc)
+    return True, "平衡型超时已应用；0.50s 运动看门狗和 3.0s Pilot 失控期望保持不变"
+
+
+def apply_balanced_timeouts(
+    project_directory: str | Path,
+    *,
+    confirmation: str,
+) -> dict[str, object]:
+    """备份并事务更新 Git 忽略的 robot.yaml 与 dataset.yaml。"""
+
+    if confirmation != BALANCED_TIMEOUT_CONFIRMATION:
+        raise FieldSetupError("平衡超时确认词错误")
+    paths = field_paths(project_directory)
+    robot, dataset = _timing_source_data(paths)
+    for logical_name, path in _ROBOT_TIMING_PATHS.items():
+        _set_nested_number(robot, path, BALANCED_TIMEOUT_VALUES[logical_name])
+    for logical_name, path in _DATASET_TIMING_PATHS.items():
+        _set_nested_number(dataset, path, BALANCED_TIMEOUT_VALUES[logical_name])
+
+    # 微秒后缀避免连续两次应用时备份名相同。
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    robot_backup = paths.robot_config.with_name(
+        f"robot.yaml.before-balanced-timeouts-{timestamp}"
+    )
+    dataset_existed = paths.dataset_config.is_file()
+    dataset_backup = paths.dataset_config.with_name(
+        f"dataset.yaml.before-balanced-timeouts-{timestamp}"
+    )
+    shutil.copy2(paths.robot_config, robot_backup)
+    if dataset_existed:
+        shutil.copy2(paths.dataset_config, dataset_backup)
+
+    try:
+        _atomic_yaml(paths.robot_config, robot)
+        _atomic_yaml(paths.dataset_config, dataset)
+        valid, reason = verify_balanced_timeouts(project_directory)
+        if not valid:
+            raise FieldSetupError(reason)
+        record = {
+            "schema_version": 1,
+            "profile": "balanced_timeouts",
+            "applied_at_utc": datetime.now(timezone.utc).isoformat(),
+            "robot_backup": str(robot_backup),
+            "dataset_backup": str(dataset_backup) if dataset_existed else None,
+            "robot_config_sha256": sha256_file(paths.robot_config),
+            "dataset_config_sha256": sha256_file(paths.dataset_config),
+            "values": dict(BALANCED_TIMEOUT_VALUES),
+            "unchanged_flight_controller_parameters": [
+                "FS_PILOT_TIMEOUT",
+                "FS_PILOT_INPUT",
+                "FS_GCS_ENABLE",
+            ],
+        }
+        _atomic_yaml(paths.timing_record, record)
+        return record
+    except Exception:
+        shutil.copy2(robot_backup, paths.robot_config)
+        if dataset_existed:
+            shutil.copy2(dataset_backup, paths.dataset_config)
+        else:
+            paths.dataset_config.unlink(missing_ok=True)
+        raise
+
+
+def print_balanced_timeout_preview(project_directory: str | Path) -> None:
+    """用现场可读格式显示所有旧值与新值。"""
+
+    for logical_name, (current, expected, valid) in inspect_balanced_timeouts(
+        project_directory
+    ).items():
+        marker = "已是目标值" if valid else "将调整"
+        print(f"{logical_name}: {current:.2f}s -> {expected:.2f}s（{marker}）")
+    print("ArduSub FS_PILOT_TIMEOUT/GCS 失控动作：不读取、不修改")
+
+
 def _print_mapping(value: Mapping[str, object]) -> None:
     for key, item in value.items():
         if isinstance(item, (tuple, list)):
@@ -760,6 +937,15 @@ def _build_parser() -> argparse.ArgumentParser:
     runtime = groups.add_parser("runtime-config")
     runtime.add_argument("--mode", required=True, choices=("auto", "manual"))
     runtime.add_argument("--output", required=True)
+
+    timing = groups.add_parser("timing")
+    timing_actions = timing.add_subparsers(dest="action", required=True)
+    timing_actions.add_parser("preview")
+    apply_timing = timing_actions.add_parser("apply")
+    apply_timing.add_argument("--confirmation", default="")
+    apply_timing.add_argument("--execute", action="store_true")
+    timing_actions.add_parser("verify")
+
     groups.add_parser("status")
     return parser
 
@@ -835,6 +1021,26 @@ def main(argv: list[str] | None = None) -> int:
                 f"会话配置已生成；机械爪 {'ENABLED' if enabled else 'DISABLED'}：{reason}"
             )
             return 0
+        if args.group == "timing" and args.action == "preview":
+            print_balanced_timeout_preview(args.project_dir)
+            print("预览完成；没有修改本地配置，也没有连接飞控。")
+            return 0
+        if args.group == "timing" and args.action == "apply":
+            print_balanced_timeout_preview(args.project_dir)
+            if not args.execute:
+                print("预览完成；没有修改本地配置。")
+                return 0
+            record = apply_balanced_timeouts(
+                args.project_dir,
+                confirmation=args.confirmation,
+            )
+            print("平衡型超时已备份并原子写入本地配置。")
+            _print_mapping(record)
+            return 0
+        if args.group == "timing" and args.action == "verify":
+            valid, reason = verify_balanced_timeouts(args.project_dir)
+            print(reason)
+            return 0 if valid else 3
         if args.group == "status":
             paths = field_paths(args.project_dir)
             print(f"project: {paths.project}")
@@ -863,6 +1069,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"weight: NOT READY - {exc}")
             valid, reason = verify_gripper_activation(args.project_dir)
             print(f"gripper: {'OK' if valid else 'NOT READY'} - {reason}")
+            timing_valid, timing_reason = verify_balanced_timeouts(args.project_dir)
+            print(
+                "timing: "
+                f"{'OK' if timing_valid else 'NOT READY'} - {timing_reason}"
+            )
             return 0
     except (FieldSetupError, OSError, ValueError) as exc:
         print(f"联调配置失败: {exc}", file=sys.stderr)

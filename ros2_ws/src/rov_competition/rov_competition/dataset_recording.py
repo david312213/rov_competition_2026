@@ -148,7 +148,7 @@ class RtpMkvRecorder:
             time.sleep(0.05)
         raise DatasetRecordingError("视频文件 8 秒内没有增长，禁止解锁")
 
-    def is_stream_fresh(self, maximum_idle_s: float = 3.0) -> bool:
+    def is_stream_fresh(self, maximum_idle_s: float = 5.0) -> bool:
         """检查录像进程存活且近期仍有新数据写入。"""
 
         if self.process is None or self.process.poll() is not None:
@@ -501,7 +501,7 @@ def video_only_main(argv: list[str] | None = None) -> int:
         print("采集完成后，回到本终端按 Enter 停止录像。")
         print("Ctrl+C 也只会停止录像，不会向飞控发送命令。")
         while True:
-            if not recorder.is_stream_fresh(maximum_idle_s=3.0):
+            if not recorder.is_stream_fresh(maximum_idle_s=5.0):
                 raise DatasetRecordingError("原始视频超过 3 秒未继续写入")
             ready, _, _ = select.select([sys.stdin], [], [], 0.25)
             if ready:

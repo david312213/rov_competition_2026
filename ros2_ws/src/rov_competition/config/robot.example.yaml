@@ -7,8 +7,8 @@ mavlink:
   # QGC 通常使用 14550；ROS 应使用 MAVLink Router 分配的另一个双向端点。
   connection_uri: "udpin:0.0.0.0:14551"
   heartbeat_timeout_s: 10.0
-  heartbeat_stale_timeout_s: 1.5
-  telemetry_stale_timeout_s: 1.0
+  heartbeat_stale_timeout_s: 2.5
+  telemetry_stale_timeout_s: 2.0
   preflight_timeout_s: 20.0
   baud: 115200
   # 旧飞控记录中的 GCS system id 是 255。若实艇参数不同，以只读预检为准。
@@ -32,7 +32,8 @@ control:
 
   # 数据采集实测 0.10 处于死区附近；采集工具允许逐级调到 0.80。
   command_limit: 0.80
-  maximum_command_age_s: 0.25
+  # ROS 时间戳允许 0.50s 调度抖动；发布者消失看门狗仍是下方 0.50s。
+  maximum_command_age_s: 0.50
   slew_rate_per_s: 0.5
   command_timeout_s: 0.5
 

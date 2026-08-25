@@ -77,17 +77,32 @@ class CommissioningNode(Node):
             return "未收齐 /rov/telemetry 和 /rov/control/status"
         return self.runtime_error()
 
-    def runtime_error(self, maximum_age_s: float = 0.75) -> str | None:
-        """每个执行周期重新检查数据新鲜度和网关状态。"""
+    def runtime_error(
+        self,
+        maximum_age_s: float | None = None,
+        *,
+        maximum_telemetry_age_s: float = 1.5,
+        maximum_status_age_s: float = 3.0,
+    ) -> str | None:
+        """每个执行周期重新检查数据新鲜度和网关状态。
+
+        ``maximum_age_s`` 仅用于兼容旧调用点；新默认值将遥测和
+        控制状态分开，避免 DDS/桌面调度抖动误中止。这不会改变
+        网关的 0.5s 运动发布者看门狗。
+        """
+
+        if maximum_age_s is not None:
+            maximum_telemetry_age_s = float(maximum_age_s)
+            maximum_status_age_s = float(maximum_age_s)
 
         now = time.monotonic()
         if self.telemetry is None or self.telemetry_received_at is None:
             return "遥测缺失"
         if self.status is None or self.status_received_at is None:
             return "控制状态缺失"
-        if now - self.telemetry_received_at > maximum_age_s:
+        if now - self.telemetry_received_at > maximum_telemetry_age_s:
             return "遥测数据过期"
-        if now - self.status_received_at > maximum_age_s:
+        if now - self.status_received_at > maximum_status_age_s:
             return "控制状态过期"
         if not self.telemetry.valid_heartbeat or not self.telemetry.valid_attitude:
             return "心跳或姿态遥测无效"

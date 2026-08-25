@@ -181,6 +181,32 @@ class AutonomousGraspMission:
 
         return self._abort(reason or "外部紧急中止", observation, now)
 
+    def delay_timers(self, paused_duration_s: float) -> None:
+        """感知软暂停恢复后，顺延所有与动作有关的单调时钟基准。
+
+        暂停期间上层只发布中位，不能把这段时间计入扫描、开环前进、
+        目标丢失、机械爪保持或任务总时限。这里只移动已有时间锚点，
+        不改变状态、帧号、目标锁和任何控制输出。
+        """
+
+        if not math.isfinite(paused_duration_s) or paused_duration_s < 0.0:
+            raise ValueError("暂停时长必须是非负有限数")
+        if paused_duration_s == 0.0:
+            return
+        for attribute in (
+            "_started_at",
+            "_state_started_at",
+            "_last_now",
+            "_settled_since",
+            "_last_target_seen_at",
+            "_last_yaw_progress_at",
+            "_last_control_at",
+            "_gripper_accepted_at",
+        ):
+            value = getattr(self, attribute)
+            if value is not None:
+                setattr(self, attribute, value + paused_duration_s)
+
     def step(self, observation: MissionObservation, now: float) -> MissionDecision:
         """运行一次固定频率控制周期。"""
 

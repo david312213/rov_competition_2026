@@ -127,7 +127,7 @@ ros2 run rov_competition rov_replay \
 
 ## 明日联调总入口
 
-端口、机械爪、新权重、自动接近和人工抓取标定已统一到一个
+端口、机械爪、新权重、本地超时迁移、自动接近和人工抓取标定已统一到一个
 交互式向导：
 
 ```bash
@@ -141,6 +141,7 @@ cd /home/persica/rov_competition_2026
 ./scripts/start_tomorrow_test.sh qgc
 ./scripts/start_tomorrow_test.sh gripper
 ./scripts/start_tomorrow_test.sh weights
+./scripts/start_tomorrow_test.sh timing
 ./scripts/start_tomorrow_test.sh search
 ./scripts/start_tomorrow_test.sh calibrate
 ```
@@ -180,8 +181,16 @@ cd /home/persica/rov_competition_2026
 软件深度上限；深度只用于界面记录，以及数据有效时按 `0` 回收。
 数据采集默认指令为 `0.20`，可逐级调到 `0.80`；
 多轴同时按下时保留每轴功率，混控仍由 ArduSub 完成。
-键盘采集允许姿态消息短时中断 `3.0 s`，但不放宽心跳断链检查。
-控制状态阈值为 `2.0 s`，并会在每个窗口周期清理积压的 ROS 回调。
+键盘采集允许姿态消息短时中断 `5.0 s`，但不放宽运动发布者
+`0.5 s` 失联停车看门狗。遥测消息和控制状态阈值分别为
+`1.5 s` 和 `3.0 s`。旧电脑上被 Git 忽略的本地配置可用下列命令
+先备份、再升级：
+
+```bash
+./scripts/start_tomorrow_test.sh timing
+```
+
+该命令不连接飞控，也不修改 ArduSub 参数。
 脚本直接接收 BlueOS 发往 `14551` 的 ROS MAVLink，启动飞控网关，
 并把 `5700` 软件视频副流复制到 `5704` 原始 MKV 录像器和键盘窗口。
 QGC 独立使用默认 `14550` 和 `5600`，不会经过本脚本。

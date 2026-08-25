@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import rclpy
@@ -43,8 +43,10 @@ from rov_competition.mission import AutonomousGraspMission
 from rov_competition.safety import (
     AutonomyControlStatus,
     AutonomyTelemetryStatus,
+    PerceptionFreshness,
     autonomy_control_error,
     autonomy_safety_error,
+    classify_perception_age,
 )
 from rov_competition.targets import load_target_config
 from rov_competition.video import (
@@ -184,6 +186,7 @@ class AutonomyNode(Node):
         self._video_recovery_pending = False
         self._last_video_warning_monotonic = 0.0
         self._terminal_action_started = False
+        self._perception_hold_started_at: float | None = None
         self._frame_id = 0
         self._perception: PerceptionSnapshot | None = None
         self._telemetry_status: AutonomyTelemetryStatus | None = None
@@ -307,6 +310,7 @@ class AutonomyNode(Node):
                 self._config.mission, self._target_config.graspable_labels
             )
             self._terminal_action_started = False
+            self._perception_hold_started_at = None
             self._active = True
             decision = self._mission.start(observation, now)
             self._publish_decision(decision, observation, publish_motion=True)
@@ -409,6 +413,13 @@ class AutonomyNode(Node):
             yaw_deg=telemetry.yaw_deg,
         )
 
+    def _perception_age_s(self, now: float) -> float:
+        """返回最新检测帧年龄；尚无任何帧时视为无限大。"""
+
+        if self._perception is None:
+            return float("inf")
+        return max(0.0, now - self._perception.received_monotonic)
+
     def _control_tick(self) -> None:
         """固定 20 Hz 执行安全检查、机械爪响应和状态机。"""
 
@@ -424,10 +435,19 @@ class AutonomyNode(Node):
                 self._telemetry_status, self._config.mission, now=now
             )
             control_error = self._control_status_error(now)
+            perception_age = self._perception_age_s(now)
+            perception_state = classify_perception_age(
+                perception_age,
+                hold_timeout_s=self._config.mission.perception_hold_timeout_s,
+                abort_timeout_s=self._config.mission.maximum_perception_age_s,
+            )
             if observation is None:
                 error = "感知或遥测快照缺失"
-            elif not observation.perception_valid:
-                error = "感知图像已过期"
+            elif perception_state == PerceptionFreshness.ABORT:
+                error = (
+                    f"感知图像已过期 {perception_age:.2f}s，超过 "
+                    f"{self._config.mission.maximum_perception_age_s:.2f}s"
+                )
             else:
                 error = telemetry_error or control_error
             if error is not None:
@@ -438,6 +458,29 @@ class AutonomyNode(Node):
                 return
 
             assert observation is not None
+            if perception_state == PerceptionFreshness.HOLD:
+                if self._perception_hold_started_at is None:
+                    self._perception_hold_started_at = now
+                    self.get_logger().warning(
+                        f"感知暂停 {perception_age:.2f}s；四轴回中并冻结任务计时"
+                    )
+                decision = replace(
+                    self._latest_decision,
+                    motion=MotionCommand.neutral(),
+                    message=(
+                        f"感知暂停 {perception_age:.2f}s，四轴回中等待；"
+                        f"{self._config.mission.maximum_perception_age_s:.1f}s 后硬中止"
+                    ),
+                )
+                self._publish_decision(decision, observation, publish_motion=True)
+                return
+            if self._perception_hold_started_at is not None:
+                paused_duration_s = now - self._perception_hold_started_at
+                self._mission.delay_timers(paused_duration_s)
+                self._perception_hold_started_at = None
+                self.get_logger().info(
+                    f"感知恢复；任务计时顺延 {paused_duration_s:.2f}s"
+                )
             decision = self._mission.step(observation, now)
             self._publish_decision(decision, observation, publish_motion=True)
             if decision.gripper != GripperAction.NONE:
@@ -568,6 +611,16 @@ class AutonomyNode(Node):
             live_stream=self._live_video_source,
             mission_active=mission_active,
         ):
+            # 活动任务不再因一帧读取失败立刻急停。控制循环会在 1s 后
+            # 回中冻结，并在配置的 5s 硬阈值后中止；录像结束也遵循同一规则。
+            if mission_active:
+                now = time.monotonic()
+                if now - self._last_video_warning_monotonic >= 1.0:
+                    self._last_video_warning_monotonic = now
+                    self.get_logger().warning(
+                        f"{reason}；等待视频恢复，控制循环将按感知年龄回中/中止"
+                    )
+                return
             self._fail_safe(reason)
             return
 
@@ -579,9 +632,16 @@ class AutonomyNode(Node):
         self._video_recovery_pending = True
         if should_log:
             self._last_video_warning_monotonic = now
-            self.get_logger().warning(
-                f"{reason}；自主任务未启动，正在重建 YOLO 解码管线，QGC 不受影响"
-            )
+            if mission_active:
+                self.get_logger().warning(
+                    f"{reason}；正在重建 YOLO 解码管线，"
+                    "活动任务已按感知年龄回中/计时"
+                )
+            else:
+                self.get_logger().warning(
+                    f"{reason}；自主任务未启动，正在重建 "
+                    "YOLO 解码管线，QGC 不受影响"
+                )
 
         try:
             self._video.release()

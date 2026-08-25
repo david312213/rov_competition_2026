@@ -69,12 +69,13 @@ def should_retry_live_video_interruption(
 ) -> bool:
     """判断视频中断后能否只重连解码器而不进入永久故障。
 
-    只读视频测试没有运动风险，因此 RTP 直播短时断帧时应自动重建本地
-    解码管线。自主任务一旦开始，或者输入是已经结束的录像文件，就不能
-    假装画面仍然有效，必须交给上层执行安全中止。
+    RTP 直播短时断帧时允许重建本地解码管线。活动自主任务仍由控制循环
+    按帧年龄立即回中、冻结计时并在硬阈值后中止，因此重连不等于继续
+    使用旧框运动。录像文件结束则不可重连。
     """
 
-    return live_stream and not mission_active
+    del mission_active  # 保留参数以兼容调用点，并明确安全判断位于上层。
+    return live_stream
 
 
 class OpenCvVideoSource:

@@ -558,6 +558,7 @@ class MissionConfig:
     maximum_operation_depth_m: float
     maximum_heartbeat_age_s: float
     maximum_message_age_s: float
+    perception_hold_timeout_s: float
     maximum_perception_age_s: float
     maximum_control_status_age_s: float
     allowed_flight_modes: tuple[str, ...]
@@ -768,10 +769,10 @@ def load_robot_config(path: str | Path) -> RobotConfig:
             connection_uri=str(mavlink["connection_uri"]),
             heartbeat_timeout_s=float(mavlink.get("heartbeat_timeout_s", 10.0)),
             heartbeat_stale_timeout_s=float(
-                mavlink.get("heartbeat_stale_timeout_s", 1.5)
+                mavlink.get("heartbeat_stale_timeout_s", 2.5)
             ),
             telemetry_stale_timeout_s=float(
-                mavlink.get("telemetry_stale_timeout_s", 1.0)
+                mavlink.get("telemetry_stale_timeout_s", 2.0)
             ),
             preflight_timeout_s=float(mavlink.get("preflight_timeout_s", 20.0)),
             baud=int(mavlink.get("baud", 115200)),
@@ -782,7 +783,7 @@ def load_robot_config(path: str | Path) -> RobotConfig:
             allowed_flight_modes=allowed_modes,
             command_limit=_finite(control.get("command_limit", 0.10), "command_limit"),
             maximum_command_age_s=_finite(
-                control.get("maximum_command_age_s", 0.25),
+                control.get("maximum_command_age_s", 0.50),
                 "maximum_command_age_s",
             ),
             slew_rate_per_s=_finite(
@@ -836,14 +837,14 @@ def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
     manual = _mapping(data.get("manual_control", {}), "manual_control")
     recovery = _mapping(data.get("recovery", {}), "recovery")
     safety = _mapping(data.get("safety", {}), "safety")
-    # 老版本模板把该值设为 0.75s。图形线程短暂停顿后，ROS 的
+    # 老版本模板把该值设得较小。图形线程短暂停顿后，ROS 的
     # telemetry/status 回调可能同时排队，过小阈值会在处理完第一个回调后
-    # 误判第二个仍然过期。采集工具固定保证至少 2s 的桌面调度余量；
+    # 误判第二个仍然过期。采集工具固定保证至少 3s 的桌面调度余量；
     # 网关自己的命令超时、飞控心跳和急停不由这个值控制。
     status_age_limit = max(
-        2.0,
+        3.0,
         _finite(
-            safety.get("maximum_status_age_s", 2.0),
+            safety.get("maximum_status_age_s", 3.0),
             "safety.maximum_status_age_s",
         ),
     )
@@ -877,12 +878,12 @@ def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
             recovery.get("timeout_s", 60.0), "recovery.timeout_s"
         ),
         maximum_telemetry_age_s=_finite(
-            safety.get("maximum_telemetry_age_s", 0.75),
+            safety.get("maximum_telemetry_age_s", 1.50),
             "safety.maximum_telemetry_age_s",
         ),
         maximum_status_age_s=status_age_limit,
         maximum_attitude_age_s=_finite(
-            safety.get("maximum_attitude_age_s", 3.0),
+            safety.get("maximum_attitude_age_s", 5.0),
             "safety.maximum_attitude_age_s",
         ),
         allowed_flight_mode=str(
@@ -1038,7 +1039,7 @@ def load_autonomy_config(path: str | Path) -> AutonomyConfig:
                 mission_data.get("alignment_confirmation_frames", 3)
             ),
             target_lost_timeout_s=_finite(
-                mission_data.get("target_lost_timeout_s", 0.8),
+                mission_data.get("target_lost_timeout_s", 1.5),
                 "mission.target_lost_timeout_s",
             ),
             horizontal_tolerance=_unit_interval(
@@ -1114,7 +1115,7 @@ def load_autonomy_config(path: str | Path) -> AutonomyConfig:
                 "mission.maximum_grasp_area_ratio",
             ),
             reacquire_grace_s=_finite(
-                mission_data.get("reacquire_grace_s", 0.5),
+                mission_data.get("reacquire_grace_s", 1.0),
                 "mission.reacquire_grace_s",
             ),
             reacquire_first_turn_deg=_finite(
@@ -1177,19 +1178,23 @@ def load_autonomy_config(path: str | Path) -> AutonomyConfig:
                 "mission.maximum_operation_depth_m",
             ),
             maximum_heartbeat_age_s=_finite(
-                mission_data.get("maximum_heartbeat_age_s", 1.5),
+                mission_data.get("maximum_heartbeat_age_s", 2.5),
                 "mission.maximum_heartbeat_age_s",
             ),
             maximum_message_age_s=_finite(
-                mission_data.get("maximum_message_age_s", 0.8),
+                mission_data.get("maximum_message_age_s", 1.5),
                 "mission.maximum_message_age_s",
             ),
+            perception_hold_timeout_s=_finite(
+                mission_data.get("perception_hold_timeout_s", 1.0),
+                "mission.perception_hold_timeout_s",
+            ),
             maximum_perception_age_s=_finite(
-                mission_data.get("maximum_perception_age_s", 0.75),
+                mission_data.get("maximum_perception_age_s", 5.0),
                 "mission.maximum_perception_age_s",
             ),
             maximum_control_status_age_s=_finite(
-                mission_data.get("maximum_control_status_age_s", 0.75),
+                mission_data.get("maximum_control_status_age_s", 3.0),
                 "mission.maximum_control_status_age_s",
             ),
             allowed_flight_modes=tuple(
@@ -1256,11 +1261,14 @@ def load_autonomy_config(path: str | Path) -> AutonomyConfig:
         mission.hard_mission_timeout_s,
         mission.maximum_heartbeat_age_s,
         mission.maximum_message_age_s,
+        mission.perception_hold_timeout_s,
         mission.maximum_perception_age_s,
         mission.maximum_control_status_age_s,
     )
     if min(*positive_distances, *positive_times) <= 0:
         raise ConfigurationError("任务时间参数必须大于 0")
+    if mission.perception_hold_timeout_s >= mission.maximum_perception_age_s:
+        raise ConfigurationError("感知回中等待时间必须小于感知硬中止时间")
     if min(
         mission.yaw_gain,
         mission.vertical_gain,

@@ -65,7 +65,7 @@ mission:
 
   detection_confirmation_frames: 5
   alignment_confirmation_frames: 3
-  target_lost_timeout_s: 0.8
+  target_lost_timeout_s: 1.5
   horizontal_tolerance: 0.08
   vertical_tolerance: 0.10
   yaw_gain: 0.5
@@ -91,7 +91,7 @@ mission:
   approach_timeout_s: 30.0
   maximum_grasp_area_ratio: 0.80
 
-  reacquire_grace_s: 0.5
+  reacquire_grace_s: 1.0
   reacquire_first_turn_deg: 60.0
   reacquire_second_turn_deg: 120.0
   reacquire_yaw_command: 0.05
@@ -114,10 +114,12 @@ mission:
   # 实艇完全浸没后的最小深度起点；0.30m 仍须用实物外形和深度零点确认。
   minimum_start_depth_m: 0.30
   maximum_operation_depth_m: 20.0
-  maximum_heartbeat_age_s: 1.5
-  maximum_message_age_s: 0.8
-  maximum_perception_age_s: 0.75
-  maximum_control_status_age_s: 0.75
+  maximum_heartbeat_age_s: 2.5
+  maximum_message_age_s: 1.5
+  # 1 秒后先回中并冻结状态计时；超过 5 秒才急停中止。
+  perception_hold_timeout_s: 1.0
+  maximum_perception_age_s: 5.0
+  maximum_control_status_age_s: 3.0
   allowed_flight_modes:
     - "ALT_HOLD"
 

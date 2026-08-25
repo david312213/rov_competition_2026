@@ -58,12 +58,14 @@ from .search_approach import (
     ManualCalibrationControl,
     SearchApproachConfig,
     SearchApproachMission,
+    SearchStateReporter,
     SearchTestDecision,
     SearchTestError,
     SearchTestState,
     SearchWorkflow,
     load_search_approach_config,
 )
+from .safety import PerceptionFreshness, classify_perception_age
 from .targets import load_target_config
 
 
@@ -71,8 +73,8 @@ CONFIRMATION = "START SEARCH TEST"
 ARM_CONFIRMATION = "ARM ROV"
 SOURCE = "commissioning"
 MAXIMUM_PERCEPTION_AGE_S = 1.0
-DETECTION_MAXIMUM_AGE_S = 0.50
-IMAGE_MAXIMUM_AGE_S = 0.50
+DETECTION_MAXIMUM_AGE_S = 1.0
+IMAGE_MAXIMUM_AGE_S = 1.0
 IMAGE_MATCH_TOLERANCE_S = 0.20
 
 
@@ -462,7 +464,9 @@ class SearchApproachNode(DatasetDriveNode):
             snapshot is None
             or now - snapshot.received_monotonic > DETECTION_MAXIMUM_AGE_S
         ):
-            raise GraspCalibrationError("没有 0.5 秒内的新鲜检测框")
+            raise GraspCalibrationError(
+                f"没有 {DETECTION_MAXIMUM_AGE_S:.1f} 秒内的新鲜检测框"
+            )
         ordered = ordered_calibration_targets(snapshot.targets, allowed_labels)
         if not ordered:
             raise GraspCalibrationError("当前帧没有允许抓取的目标框")
@@ -940,10 +944,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         manual_control = ManualCalibrationControl(search)
         observation = node.observation()
+        mission_started_at = time.monotonic()
         decision = mission.start(
             observation,
             descent_command=descent_power,
-            now=time.monotonic(),
+            now=mission_started_at,
+        )
+        state_reporter = SearchStateReporter(mission)
+        state_reporter.report(
+            decision,
+            observation,
+            mission_started_at,
+            manual_power=(manual_control.strength if manual_mode else None),
         )
         node.publish(decision.motion)
         node.publish_mission_status(decision, observation)
@@ -1139,18 +1151,21 @@ def main(argv: list[str] | None = None) -> int:
             if error is not None:
                 raise DatasetDriveError(error)
             perception_age = node.perception_age_s()
-            if perception_age > search.perception_abort_timeout_s:
+            perception_state = classify_perception_age(
+                perception_age,
+                hold_timeout_s=search.perception_hold_timeout_s,
+                abort_timeout_s=search.perception_abort_timeout_s,
+            )
+            if perception_state == PerceptionFreshness.ABORT:
                 raise DatasetDriveError(
                     f"超过 {search.perception_abort_timeout_s:.1f} 秒"
                     "没有新鲜检测帧"
                 )
-            if not recorder.is_stream_fresh(maximum_idle_s=3.0):
+            if not recorder.is_stream_fresh(maximum_idle_s=5.0):
                 raise DatasetDriveError("原始视频录像停止增长")
             observation = node.observation()
             now = time.monotonic()
-            perception_holding = (
-                perception_age > search.perception_hold_timeout_s
-            )
+            perception_holding = perception_state == PerceptionFreshness.HOLD
             if perception_holding and not paused:
                 if perception_hold_started_at is None:
                     perception_hold_started_at = now
@@ -1215,6 +1230,13 @@ def main(argv: list[str] | None = None) -> int:
                 actual_motion = manual_control.motion()
                 if not actual_motion.is_neutral():
                     last_manual_motion = actual_motion
+            reported_decision = replace(decision, motion=actual_motion)
+            state_reporter.report(
+                reported_decision,
+                observation,
+                now,
+                manual_power=(manual_control.strength if manual_mode else None),
+            )
             if last_state != decision.state:
                 if (
                     last_state == SearchTestState.DESCENDING
@@ -1286,12 +1308,12 @@ def main(argv: list[str] | None = None) -> int:
     except (DatasetDriveError, SearchTestError) as exc:
         outcome = "emergency_stopped" if control_opened else "failed_before_arm"
         detail = str(exc)
-        print(f"\n搜索测试中止: {detail}")
+        print(f"\n[任务中止] {detail}", flush=True)
         result_code = 2
     except GraspCalibrationError as exc:
         outcome = "emergency_stopped" if control_opened else "failed_before_arm"
         detail = str(exc)
-        print(f"\n抓取位置标定中止: {detail}")
+        print(f"\n[任务中止] 抓取位置标定：{detail}", flush=True)
         result_code = 2
     except Exception as exc:
         outcome = "emergency_stopped" if control_opened else "failed_before_arm"
@@ -1302,7 +1324,7 @@ def main(argv: list[str] | None = None) -> int:
             trace_path.write_text(traceback.format_exc(), encoding="utf-8")
         except OSError:
             pass
-        print(f"\n搜索测试中止: {detail}")
+        print(f"\n[任务中止] {detail}", flush=True)
         result_code = 2
     finally:
         if node is not None and rclpy.ok() and control_opened and not normal_complete:
@@ -1340,10 +1362,10 @@ def main(argv: list[str] | None = None) -> int:
         if rclpy.ok():
             rclpy.shutdown()
 
-    print(f"会话目录: {session_dir}")
+    print(f"会话目录: {session_dir}", flush=True)
     if normal_complete:
         label = "抓取位置标定" if manual_mode else "搜索—接近测试"
-        print(f"{label}完成，ROV 已回到启动深度附近并正常上锁。")
+        print(f"[任务完成] {label}完成，ROV 已回到启动深度附近并正常上锁。", flush=True)
     return result_code
 
 
