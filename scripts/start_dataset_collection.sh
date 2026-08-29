@@ -173,9 +173,9 @@ fi
 for port in "${ROS_MAVLINK_PORT}" "${SOFTWARE_VIDEO_PORT}" "${RECORD_VIDEO_PORT}"; do
   ensure_free_port "${port}"
 done
-if ros2 node list 2>/dev/null | grep -Eq '^/(rov_vehicle_gateway|rov_dataset_drive|rov_autonomy|rov_search_perception|rov_search_approach_test)$'; then
+if ros2 node list 2>/dev/null | grep -Eq '^/(rov_vehicle_gateway|rov_dataset_drive|rov_autonomy|rov_search_perception|rov_search_approach_test|rov_cluster_collection_test)$'; then
   echo "检测到旧控制/自主节点，请先在原终端 Ctrl+C：" >&2
-  ros2 node list 2>/dev/null | grep -E '^/(rov_vehicle_gateway|rov_dataset_drive|rov_autonomy|rov_search_perception|rov_search_approach_test)$' >&2
+  ros2 node list 2>/dev/null | grep -E '^/(rov_vehicle_gateway|rov_dataset_drive|rov_autonomy|rov_search_perception|rov_search_approach_test|rov_cluster_collection_test)$' >&2
   exit 1
 fi
 

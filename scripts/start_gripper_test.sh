@@ -60,7 +60,7 @@ if [[ -n "${OWNER}" ]]; then
   echo "${OWNER}" >&2
   exit 1
 fi
-if ros2 node list 2>/dev/null | grep -Eq '^/(rov_vehicle_gateway|rov_dataset_drive|rov_search_approach_test)$'; then
+if ros2 node list 2>/dev/null | grep -Eq '^/(rov_vehicle_gateway|rov_dataset_drive|rov_search_approach_test|rov_cluster_collection_test)$'; then
   echo "检测到旧控制节点，请先在原终端 Ctrl+C。" >&2
   exit 1
 fi

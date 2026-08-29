@@ -42,7 +42,7 @@ ros2 interface show rov_interfaces/srv/SetGripper >/dev/null
 ros2 interface show rov_interfaces/msg/NormalizedMotionCommand >/dev/null
 
 EXECUTABLES="$(ros2 pkg executables rov_competition)"
-for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_dataset_drive rov_dataset_record rov_field_setup rov_frame_extractor rov_gripper_test rov_turn_test rov_replay rov_stream_bridge rov_search_approach_test; do
+for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_dataset_drive rov_dataset_record rov_field_setup rov_frame_extractor rov_gripper_test rov_turn_test rov_replay rov_stream_bridge rov_search_approach_test rov_cluster_collection_test; do
   if ! grep -q " ${REQUIRED}$" <<<"${EXECUTABLES}"; then
     echo "缺少 ROS 命令入口: ${REQUIRED}" >&2
     exit 1
@@ -63,6 +63,10 @@ if [[ ! -x "${PROJECT_DIR}/scripts/start_frame_extractor.sh" ]]; then
 fi
 if [[ ! -x "${PROJECT_DIR}/scripts/start_search_approach_test.sh" ]]; then
   echo "缺少搜索—接近一键水池测试脚本" >&2
+  exit 1
+fi
+if [[ ! -x "${PROJECT_DIR}/scripts/start_cluster_collection_test.sh" ]]; then
+  echo "缺少可执行群体收集一键脚本" >&2
   exit 1
 fi
 if [[ ! -x "${PROJECT_DIR}/scripts/start_grasp_position_test.sh" ]]; then
@@ -86,7 +90,8 @@ fi
 PACKAGE_SHARE="$(ros2 pkg prefix --share rov_competition)"
 for REQUIRED_FILE in \
   "${PACKAGE_SHARE}/launch/perception_only.launch.py" \
-  "${PACKAGE_SHARE}/config/search_test.yaml"; do
+  "${PACKAGE_SHARE}/config/search_test.yaml" \
+  "${PACKAGE_SHARE}/config/cluster_collection.yaml"; do
   if [[ ! -r "${REQUIRED_FILE}" ]]; then
     echo "缺少已安装的搜索测试文件: ${REQUIRED_FILE}" >&2
     exit 1

@@ -18,6 +18,7 @@
 | 用手柄驾驶并录像 | [手柄采集 README](docs/手柄采集README.md) |
 | 用键盘驾驶并录像 | [键盘采集 README](docs/键盘采集README.md) |
 | 测试“搜索—对准—接近”逻辑 | [搜索接近测试 README](docs/搜索接近测试README.md) |
+| 测试“触底—离底—扇贝群三次盲抓” | [群体收集测试 README](docs/群体收集测试README.md) |
 | 标定和测试机械爪 | [实机操作](docs/实机操作.md) 第 9.1 节 |
 | 记录成功抓取时的框位置和大小 | [实机操作](docs/实机操作.md) 第 11.4 节 |
 | 把录像导出成全部或均匀取样图片 | [抽帧工具 README](docs/抽帧工具README.md) |
@@ -45,7 +46,9 @@ rov_competition_2026/
 
 | 想改什么 | 先看哪个文件 |
 |---|---|
-| 自主任务步骤和状态跳转 | `mission.py` |
+| 正式自主任务步骤和状态跳转 | `mission.py` |
+| 扇贝群搜索和盲抓测试 | `cluster_collection.py` |
+| 触底平台和离底共用判定 | `bottom_clearance.py` |
 | 参数定义和配置校验 | `config.py` |
 | YOLO 检测结果 | `detector.py` |
 | 视频输入和 RTP 解码 | `video.py` |
@@ -236,6 +239,22 @@ cd /home/persica/rov_competition_2026
 记录实物成败。`0` 正常回到启动深度并上锁；`Space` 只回中/暂停，
 `Esc`、关闭窗口或 `Ctrl+C` 走急停路径。完整键位和明日顺序见
 [搜索接近测试 README](docs/搜索接近测试README.md)。
+
+## 一键扇贝群体收集测试
+
+新增流程与上面的单目标测试完全独立，不会替换原入口：
+
+```bash
+cd /home/persica/rov_competition_2026
+./scripts/start_cluster_collection_test.sh
+```
+
+它使用“触底重新标定 → 上浮 `0.15m` → 扫描”的跳跃式流程；
+最近 5 帧中至少 3 帧看到同一空间群中不少于 6 个 `scallop`
+才锁定，对准并靠近后每群执行 3 次盲抓动作。没有下视测距时
+它不是真实地形跟随，爪子 ACK 也不等于抓取成功。必须先按文档
+的“只显示 → 只对准 → 靠近不下降 → 单次盲抓 → 三次盲抓”顺序验收。
+详见 [群体收集测试 README](docs/群体收集测试README.md)。
 
 机械爪还未确定是哪套接线时，必须先断开推进器并分别执行：
 

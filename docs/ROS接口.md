@@ -19,7 +19,8 @@
 |---|---|---|
 | `/rov/detections` | `rov_interfaces/msg/TargetDetectionArray` | 当前新图像的全部识别框 |
 | `/rov/annotated_image/compressed` | `sensor_msgs/msg/CompressedImage` | 带全部框、锁定框、瞄准点、面积、k、深度和扫描进度的画面 |
-| `/rov/mission/status` | `rov_interfaces/msg/MissionStatus` | 状态、结果、目标、面积/k、中心误差、深度、扫描角和估算前进距离 |
+| `/rov/cluster_image/compressed` | `sensor_msgs/msg/CompressedImage` | 群体测试的额外叠加画面：锁定群、群中心、`y=0.70` 线、状态和抓取轮次 |
+| `/rov/mission/status` | `rov_interfaces/msg/MissionStatus` | 状态、结果、目标、面积/k、中心误差、深度、扫描角；末尾兼容增加群体有效性、可见/锁定扇贝数、群中心、联合面积、抓取序号、已处理群数和下降判据 |
 | `/rov/mission_state` | `std_msgs/msg/String` | 旧显示程序使用的兼容状态话题 |
 | `/rov/mission/start` | `std_srvs/srv/Trigger` | 完成全部启动检查后开始任务 |
 | `/rov/mission/abort` | `std_srvs/srv/Trigger` | 中止任务并请求网关急停 |
@@ -30,6 +31,11 @@
 自动对准完成后，测试节点继续以唯一的 `commissioning` 来源发布 WASD
 运动命令；QGC 此时只观察和保留人工上锁能力。`Enter/G → C → Y/N` 的
 顺序分别对应“保存闭爪前证据 → 请求闭爪 → 人工确认实物结果”。
+
+`start_cluster_collection_test.sh` 也复用同一组控制、遥测、检测和
+机械爪接口。它在 `/rov/mission/status` 末尾字段发布群体状态，
+并在 `/rov/cluster_image/compressed` 发布实验叠加画面。感知节点只发布
+新检测，群体控制节点是唯一的 `commissioning` 运动来源。
 
 `start_gripper_test.sh dalian|rst` 是独立的上锁台架工具：它不启动 ROS
 飞控网关、不创建运动发布器、不调用解锁服务，而是通过独立 MAVLink 端点

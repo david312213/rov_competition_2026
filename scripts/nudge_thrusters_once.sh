@@ -148,7 +148,7 @@ if ! ping -c 2 -W 2 "${ROV_IP}" >/dev/null; then
 fi
 
 ACTIVE_CONTROL_NODES="$(ros2 node list 2>/dev/null | grep -E \
-  '^/(rov_dataset_drive|rov_search_approach_test)$' || true)"
+  '^/(rov_dataset_drive|rov_search_approach_test|rov_cluster_collection_test)$' || true)"
 if [[ -n "${ACTIVE_CONTROL_NODES}" ]]; then
   echo "发现 WASD/自主控制节点，不能同时点动：" >&2
   echo "${ACTIVE_CONTROL_NODES}" >&2

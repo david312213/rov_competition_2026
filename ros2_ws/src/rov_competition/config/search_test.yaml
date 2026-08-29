@@ -51,21 +51,33 @@ search_test:
   advance_duration_s: 2.0
 
   aim_x_ratio: 0.50
+  # 与带框画面的 GRASP AIM 保持一致；实际运行会优先使用
+  # 当前 autonomy(.local).yaml 中的抓取瞄准点。
+  aim_y_ratio: 0.70
   # 前视画面未镜像：+1 表示左框左转、右框右转。
   # 只有实测确认画面被镜像时才改为 -1。
   image_yaw_sign: 1
+  # 普通前视画面：框在瞄准点上方时上升，让框在画面中下移；
+  # 框在瞄准点下方时下潜。实测反向时改为 +1。
+  image_vertical_sign: -1
   horizontal_tolerance: 0.08
+  vertical_tolerance: 0.10
   realign_threshold: 0.12
+  vertical_realign_threshold: 0.15
   alignment_frames: 3
   yaw_gain: 0.80
   minimum_yaw_command: 0.10
   maximum_yaw_command: 0.20
+  vertical_gain: 0.80
+  minimum_vertical_command: 0.30
+  maximum_vertical_command: 0.40
 
   far_area_ratio: 0.07
   stop_area_ratio: 0.10
   far_forward_command: 0.20
   near_forward_command: 0.10
   approach_yaw_command: 0.10
+  approach_vertical_command: 0.30
   maximum_target_area_ratio: 0.80
 
   acquisition_window_frames: 5

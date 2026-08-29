@@ -28,6 +28,7 @@ setup(
             "rov_replay = rov_competition.replay:main",
             "rov_autonomy = rov_competition.ros_nodes.autonomy_node:main",
             "rov_search_approach_test = rov_competition.search_approach_runtime:main",
+            "rov_cluster_collection_test = rov_competition.cluster_collection_runtime:main",
             "rov_axis_test = rov_competition.axis_test:main",
             "rov_dataset_drive = rov_competition.dataset_drive:main",
             "rov_dataset_record = rov_competition.dataset_recording:video_only_main",

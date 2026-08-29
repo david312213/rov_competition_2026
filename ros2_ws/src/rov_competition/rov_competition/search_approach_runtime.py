@@ -375,8 +375,14 @@ class SearchSessionLogger:
 class SearchApproachNode(DatasetDriveNode):
     """增加检测、带框截图、任务状态和显式机械爪服务。"""
 
-    def __init__(self, *, capture_images: bool = True) -> None:
-        super().__init__(source=SOURCE, node_name="rov_search_approach_test")
+    def __init__(
+        self, *, capture_images: bool = True, node_name: str | None = None
+    ) -> None:
+        # 保留原有默认名；独立群体收集运行时才显式传入新名。
+        super().__init__(
+            source=SOURCE,
+            node_name="rov_search_approach_test" if node_name is None else node_name,
+        )
         self.detection_received_at: float | None = None
         self.detection_frame_id = 0
         self.detections: tuple[Detection, ...] = ()

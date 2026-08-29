@@ -18,6 +18,7 @@ AUTONOMY_LOCAL="${PROJECT_DIR}/config/autonomy.local.yaml"
 AUTONOMY_CONFIG="${AUTONOMY_CONFIG:-${AUTONOMY_TEMPLATE}}"
 TARGETS_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/targets.yaml"
 SEARCH_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/search_test.yaml"
+CLUSTER_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/cluster_collection.yaml"
 
 ROV_IP="${ROV_IP:-192.168.2.2}"
 TOPSIDE_IP="${TOPSIDE_IP:-192.168.2.1}"
@@ -37,11 +38,13 @@ CLEANED_UP=false
 
 usage() {
   printf '%s\n' \
-    '用法：./scripts/start_search_approach_test.sh [--workflow auto_approach|manual_grasp_calibration]' \
+    '用法：./scripts/start_search_approach_test.sh [--workflow auto_approach|manual_grasp_calibration|cluster_collection]' \
     '' \
     'auto_approach：自动下潜、扫描、对准、接近，然后回收。' \
     'manual_grasp_calibration：自动对准后停车，进入 WASD 抓取位置标定。' \
-    '两个模式都会在解锁前询问下潜 power 和确认词；疑似触底确认后先上浮 0.10m 并稳定定深，再进入扫描。'
+    'cluster_collection：触底、离底搜索、群体靠近和每群三次盲抓。' \
+    '三个模式都会在解锁前询问下潜 power 和确认词。' \
+    '单目标流程离底 0.10m；群体收集流程每次重新触底后离底 0.15m。'
 }
 while (($# > 0)); do
   case "$1" in
@@ -61,7 +64,7 @@ while (($# > 0)); do
       ;;
   esac
 done
-if [[ "${WORKFLOW}" != "auto_approach" && "${WORKFLOW}" != "manual_grasp_calibration" ]]; then
+if [[ "${WORKFLOW}" != "auto_approach" && "${WORKFLOW}" != "manual_grasp_calibration" && "${WORKFLOW}" != "cluster_collection" ]]; then
   echo "未知工作流：${WORKFLOW}" >&2
   exit 2
 fi
@@ -99,7 +102,7 @@ trap 'exit 143' TERM
 
 for required in \
   "${ROS_SETUP}" "${VENV_SETUP}" "${WORKSPACE_SETUP}" "${ROBOT_CONFIG}" \
-  "${AUTONOMY_TEMPLATE}" "${TARGETS_CONFIG}" "${SEARCH_CONFIG}"; do
+  "${AUTONOMY_TEMPLATE}" "${TARGETS_CONFIG}" "${SEARCH_CONFIG}" "${CLUSTER_CONFIG}"; do
   [[ -r "${required}" ]] || { echo "缺少必要文件：${required}" >&2; exit 1; }
 done
 if [[ ! -r "${DATASET_CONFIG}" ]]; then
@@ -177,7 +180,7 @@ ping -c 3 -W 2 "${ROV_IP}" >/dev/null || { echo "无法连通 ${ROV_IP}" >&2; ex
 for port in "${ROS_MAVLINK_PORT}" "${SOFTWARE_VIDEO_PORT}" "${YOLO_VIDEO_PORT}" "${RECORD_VIDEO_PORT}"; do
   ensure_free_port "${port}"
 done
-if ros2 node list 2>/dev/null | grep -Eq '^/(rov_vehicle_gateway|rov_dataset_drive|rov_autonomy|rov_search_perception|rov_search_approach_test)$'; then
+if ros2 node list 2>/dev/null | grep -Eq '^/(rov_vehicle_gateway|rov_dataset_drive|rov_autonomy|rov_search_perception|rov_search_approach_test|rov_cluster_collection_test)$'; then
   echo "检测到旧的飞控/感知/控制节点，请先 Ctrl+C。" >&2
   exit 1
 fi
@@ -186,6 +189,9 @@ SESSION_NAME="$(date +%Y%m%d_%H%M%S)"
 if [[ "${WORKFLOW}" == "manual_grasp_calibration" ]]; then
   SESSION_ROOT="${PROJECT_DIR}/output/grasp_tests"
   MODE_TITLE="抓取位置标定"
+elif [[ "${WORKFLOW}" == "cluster_collection" ]]; then
+  SESSION_ROOT="${PROJECT_DIR}/output/cluster_collection_tests"
+  MODE_TITLE="群体盲抓与跳跃式离底搜索"
 else
   SESSION_ROOT="${PROJECT_DIR}/output/search_tests"
   MODE_TITLE="搜索—自动接近"
@@ -194,7 +200,7 @@ SESSION_DIR="${SESSION_ROOT}/${SESSION_NAME}"
 [[ ! -e "${SESSION_DIR}" ]] || SESSION_DIR="${SESSION_DIR}_$$"
 mkdir -p "${SESSION_DIR}/logs"
 RUNTIME_ROBOT_CONFIG="${SESSION_DIR}/resolved_robot.yaml"
-if [[ "${WORKFLOW}" == "manual_grasp_calibration" ]]; then
+if [[ "${WORKFLOW}" == "manual_grasp_calibration" || "${WORKFLOW}" == "cluster_collection" ]]; then
   RUNTIME_MODE="manual"
 else
   RUNTIME_MODE="auto"
@@ -281,9 +287,26 @@ if ! timeout 30 bash -c \
   tail -n 100 "${SESSION_DIR}/logs/perception.log" >&2 || true
   exit 1
 fi
-ros2 run rqt_image_view rqt_image_view \
-  "/rov/annotated_image compressed" \
-  >"${SESSION_DIR}/logs/annotated_viewer.log" 2>&1 &
+if [[ "${WORKFLOW}" == "cluster_collection" ]]; then
+  VIEW_BASE_TOPIC="/rov/cluster_image"
+  # 群体叠加发布者由后面的前台测试节点创建。查看器先在
+  # 后台等待该话题出现，避免话题还不存在时 rqt 直接退出。
+  bash -c '
+    topic="$1"
+    until ros2 topic list 2>/dev/null | grep -qx "${topic}/compressed"; do
+      sleep 0.25
+    done
+    exec ros2 run rqt_image_view rqt_image_view "${topic} compressed"
+  ' _ "${VIEW_BASE_TOPIC}" \
+    >"${SESSION_DIR}/logs/annotated_viewer.log" 2>&1 &
+  VIEW_TOPIC="${VIEW_BASE_TOPIC} compressed"
+else
+  VIEW_BASE_TOPIC="/rov/annotated_image"
+  VIEW_TOPIC="/rov/annotated_image compressed"
+  ros2 run rqt_image_view rqt_image_view \
+    "${VIEW_TOPIC}" \
+    >"${SESSION_DIR}/logs/annotated_viewer.log" 2>&1 &
+fi
 VIEWER_PID=$!
 sleep 2
 if ! kill -0 "${VIEWER_PID}" 2>/dev/null; then
@@ -291,22 +314,39 @@ if ! kill -0 "${VIEWER_PID}" 2>/dev/null; then
   tail -n 100 "${SESSION_DIR}/logs/annotated_viewer.log" >&2 || true
   exit 1
 fi
-echo "YOLO 带框画面已自动打开：/rov/annotated_image (compressed)"
+if [[ "${WORKFLOW}" == "cluster_collection" ]]; then
+  echo "群体节点就绪后将自动打开带框画面：${VIEW_TOPIC}"
+else
+  echo "YOLO 带框画面已自动打开：${VIEW_TOPIC}"
+fi
 echo "QGC 继续显示 5600 原始画面；关闭带框窗口不会中止任务。"
 
 set +e
-ros2 run rov_competition rov_search_approach_test \
-  --robot-config "${RUNTIME_ROBOT_CONFIG}" \
-  --dataset-config "${DATASET_CONFIG}" \
-  --autonomy-config "${AUTONOMY_CONFIG}" \
-  --targets-config "${TARGETS_CONFIG}" \
-  --search-config "${SEARCH_CONFIG}" \
-  --session-dir "${SESSION_DIR}" \
-  --project-dir "${PROJECT_DIR}" \
-  --record-port "${RECORD_VIDEO_PORT}" \
-  --workflow "${WORKFLOW}" \
-  --execute
-TEST_STATUS=$?
+if [[ "${WORKFLOW}" == "cluster_collection" ]]; then
+  ros2 run rov_competition rov_cluster_collection_test \
+    --robot-config "${RUNTIME_ROBOT_CONFIG}" \
+    --dataset-config "${DATASET_CONFIG}" \
+    --autonomy-config "${AUTONOMY_CONFIG}" \
+    --cluster-config "${CLUSTER_CONFIG}" \
+    --session-dir "${SESSION_DIR}" \
+    --project-dir "${PROJECT_DIR}" \
+    --record-port "${RECORD_VIDEO_PORT}" \
+    --execute
+  TEST_STATUS=$?
+else
+  ros2 run rov_competition rov_search_approach_test \
+    --robot-config "${RUNTIME_ROBOT_CONFIG}" \
+    --dataset-config "${DATASET_CONFIG}" \
+    --autonomy-config "${AUTONOMY_CONFIG}" \
+    --targets-config "${TARGETS_CONFIG}" \
+    --search-config "${SEARCH_CONFIG}" \
+    --session-dir "${SESSION_DIR}" \
+    --project-dir "${PROJECT_DIR}" \
+    --record-port "${RECORD_VIDEO_PORT}" \
+    --workflow "${WORKFLOW}" \
+    --execute
+  TEST_STATUS=$?
+fi
 set -e
 echo "测试文件：${SESSION_DIR}"
 exit "${TEST_STATUS}"

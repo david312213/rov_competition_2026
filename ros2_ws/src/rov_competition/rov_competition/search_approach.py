@@ -17,6 +17,7 @@ from typing import Callable, Mapping, Sequence
 
 import yaml
 
+from .bottom_clearance import update_bottom_clearance, update_bottom_probe
 from .domain import Detection, MissionObservation, MotionCommand
 from .dataset_control import MOVEMENT_KEYS, motion_from_keys
 from .mission import signed_yaw_delta_deg
@@ -101,20 +102,29 @@ class SearchApproachConfig:
     advance_duration_s: float = 2.0
 
     aim_x_ratio: float = 0.50
+    aim_y_ratio: float = 0.70
     # +1: 前视非镜像画面，左框左转/右框右转；-1: 镜像画面。
     image_yaw_sign: int = 1
+    # -1: 框在瞄准点上方时上升；+1: 竖直画面/执行器映射反向。
+    image_vertical_sign: int = -1
     horizontal_tolerance: float = 0.08
+    vertical_tolerance: float = 0.10
     realign_threshold: float = 0.12
+    vertical_realign_threshold: float = 0.15
     alignment_frames: int = 3
     yaw_gain: float = 0.8
     minimum_yaw_command: float = 0.10
     maximum_yaw_command: float = 0.20
+    vertical_gain: float = 0.8
+    minimum_vertical_command: float = 0.30
+    maximum_vertical_command: float = 0.40
 
     far_area_ratio: float = 0.07
     stop_area_ratio: float = 0.10
     far_forward_command: float = 0.20
     near_forward_command: float = 0.10
     approach_yaw_command: float = 0.10
+    approach_vertical_command: float = 0.30
     maximum_target_area_ratio: float = 0.80
 
     acquisition_window_frames: int = 5
@@ -174,15 +184,21 @@ class SearchApproachConfig:
             self.advance_forward_command,
             self.advance_duration_s,
             self.horizontal_tolerance,
+            self.vertical_tolerance,
             self.realign_threshold,
+            self.vertical_realign_threshold,
             self.yaw_gain,
             self.minimum_yaw_command,
             self.maximum_yaw_command,
+            self.vertical_gain,
+            self.minimum_vertical_command,
+            self.maximum_vertical_command,
             self.far_area_ratio,
             self.stop_area_ratio,
             self.far_forward_command,
             self.near_forward_command,
             self.approach_yaw_command,
+            self.approach_vertical_command,
             self.maximum_target_area_ratio,
             self.loss_confirmation_s,
             self.alignment_loss_grace_s,
@@ -251,12 +267,18 @@ class SearchApproachConfig:
             raise SearchTestError("停止面积必须小于异常大框阈值")
         if not 0.0 < self.horizontal_tolerance < self.realign_threshold < 1.0:
             raise SearchTestError("水平容差必须小于重新对准阈值")
-        if not 0.0 < self.aim_x_ratio < 1.0:
+        if not 0.0 < self.aim_x_ratio < 1.0 or not 0.0 < self.aim_y_ratio < 1.0:
             raise SearchTestError("画面瞄准点必须位于画面内")
         if self.image_yaw_sign not in {-1, 1}:
             raise SearchTestError("image_yaw_sign 必须是 +1 或 -1")
+        if self.image_vertical_sign not in {-1, 1}:
+            raise SearchTestError("image_vertical_sign 必须是 +1 或 -1")
+        if not 0.0 < self.vertical_tolerance < self.vertical_realign_threshold < 1.0:
+            raise SearchTestError("纵向容差必须小于纵向重新对准阈值")
         if self.minimum_yaw_command > self.maximum_yaw_command:
             raise SearchTestError("最小偏航指令不能大于最大值")
+        if self.minimum_vertical_command > self.maximum_vertical_command:
+            raise SearchTestError("最小升沉指令不能大于最大值")
         integer_values = (
             self.maximum_search_cycles,
             self.alignment_frames,
@@ -959,61 +981,23 @@ class SearchApproachMission:
                 observation,
             )
 
-        # 保留覆盖最近 stable_s 的完整深度窗口。不能只比较相邻
-        # 两次读数：慢速下潜时，每次变化都很小，但 3 秒窗口的
-        # 总变化仍能证明艇在移动。
-        self.descent_depth_history.append((float(now), float(observation.depth_m)))
-        cutoff = now - self.config.bottom_detection_stable_s
-        while (
-            len(self.descent_depth_history) >= 2
-            and self.descent_depth_history[1][0] <= cutoff
-        ):
-            self.descent_depth_history.popleft()
-        # 从最新样本反向寻找“仍在 0.05m 容差内”的最长连续后缀，
-        # 因而能明确打印稳定 1/3、2/3、3/3 秒；深度重新变化时计时归零。
-        stable_samples: list[tuple[float, float]] = []
-        stable_min = float(observation.depth_m)
-        stable_max = float(observation.depth_m)
-        tolerance = self.config.bottom_detection_depth_tolerance_m
-        for sample_time, depth_m in reversed(self.descent_depth_history):
-            candidate_min = min(stable_min, depth_m)
-            candidate_max = max(stable_max, depth_m)
-            if candidate_max - candidate_min > tolerance + 1e-6:
-                break
-            stable_samples.append((sample_time, depth_m))
-            stable_min = candidate_min
-            stable_max = candidate_max
-        stable_samples.reverse()
-        stable_depths = [depth_m for _, depth_m in stable_samples]
-        stable_duration_s = (
-            max(0.0, now - stable_samples[0][0]) if stable_samples else 0.0
+        probe = update_bottom_probe(
+            self.descent_depth_history,
+            now=now,
+            current_depth_m=observation.depth_m,
+            probe_start_depth_m=self.start_depth_m,
+            stable_duration_required_s=self.config.bottom_detection_stable_s,
+            stable_depth_tolerance_m=self.config.bottom_detection_depth_tolerance_m,
+            minimum_descent_m=self.config.bottom_detection_minimum_descent_m,
+            neutral_confirmation_s=self.config.bottom_neutral_confirmation_s,
         )
-        depth_span_m = stable_max - stable_min
-        descended_m = observation.depth_m - self.start_depth_m
-        # 深度遥测是 float32，0.20 -> 0.30 可能计算成
-        # 0.09999999。一个很小的数值容差只用来消除浮点边界误差。
-        comparison_epsilon_m = 1e-6
-        enough_descent = (
-            descended_m + comparison_epsilon_m
-            >= self.config.bottom_detection_minimum_descent_m
-        )
-        self.bottom_stable_duration_s = stable_duration_s if enough_descent else 0.0
-        self.bottom_depth_span_m = depth_span_m
-        bottom_candidate = (
-            enough_descent
-            and stable_duration_s >= self.config.bottom_detection_stable_s
-        )
-        if bottom_candidate:
+        self.bottom_stable_duration_s = probe.stable_duration_s
+        self.bottom_depth_span_m = probe.depth_span_m
+        if probe.confirmed:
             # 记下实测触底深度。进入扫描前先回中，不让推进器
             # 在状态切换的这一帧继续向池底施力。
-            sorted_depths = sorted(stable_depths)
-            middle = len(sorted_depths) // 2
-            if len(sorted_depths) % 2:
-                bottom_depth_m = sorted_depths[middle]
-            else:
-                bottom_depth_m = (
-                    sorted_depths[middle - 1] + sorted_depths[middle]
-                ) / 2.0
+            assert probe.bottom_depth_m is not None
+            bottom_depth_m = probe.bottom_depth_m
             self.bottom_depth_m = float(bottom_depth_m)
             # 深度以向下为正，因此离底目标是池底深度减去间隙。
             # 不让这个阶段浮到本次启动深度之上。
@@ -1034,16 +1018,12 @@ class SearchApproachMission:
         # 足够长的疑似平台。随后立即把 vertical 回中，由 ALT_HOLD
         # 定住当前深度，剩余时间只用于确认平台没有消失。若深度重新
         # 明显变化，稳定计时会归零，程序才恢复下潜指令。
-        hold_depth = (
-            enough_descent
-            and stable_duration_s >= self.config.bottom_neutral_confirmation_s
-        )
-        vertical = 0.0 if hold_depth else -self.descent_command
+        vertical = 0.0 if probe.hold_neutral else -self.descent_command
         progress_note = (
-            f"已下潜 {max(0.0, descended_m):.2f} m"
-            if enough_descent
+            f"已下潜 {max(0.0, probe.descended_m):.2f} m"
+            if probe.enough_descent
             else (
-                f"已下潜 {max(0.0, descended_m):.2f}/"
+                f"已下潜 {max(0.0, probe.descended_m):.2f}/"
                 f"{self.config.bottom_detection_minimum_descent_m:.2f} m"
             )
         )
@@ -1052,8 +1032,8 @@ class SearchApproachMission:
             observation,
             f"下潜探底：深度 {observation.depth_m:.2f} m，{progress_note}，"
             f"稳定 {self.bottom_stable_duration_s:.1f}/{self.config.bottom_detection_stable_s:.1f}s，"
-            f"变化 {depth_span_m:.3f}/{self.config.bottom_detection_depth_tolerance_m:.3f}m，"
-            + ("ALT_HOLD 定深确认" if hold_depth else "继续下潜"),
+            f"变化 {probe.depth_span_m:.3f}/{self.config.bottom_detection_depth_tolerance_m:.3f}m，"
+            + ("ALT_HOLD 定深确认" if probe.hold_neutral else "继续下潜"),
         )
 
     def _step_clearing_bottom(
@@ -1069,29 +1049,24 @@ class SearchApproachMission:
             return self.abort("离底基准深度缺失", observation)
         if now - self.state_started_at >= self.config.bottom_clearance_timeout_s:
             return self.abort("触底后离底上浮超时", observation)
-        if (
-            observation.depth_m - self.bottom_depth_m
-            > self.config.bottom_detection_depth_tolerance_m + 1e-6
-        ):
+        clearance = update_bottom_clearance(
+            now=now,
+            current_depth_m=observation.depth_m,
+            bottom_depth_m=self.bottom_depth_m,
+            target_depth_m=self.target_depth_m,
+            bottom_depth_tolerance_m=self.config.bottom_detection_depth_tolerance_m,
+            clearance_tolerance_m=self.config.bottom_clearance_tolerance_m,
+            settle_duration_s=self.config.bottom_clearance_settle_s,
+            up_command=self.config.bottom_clearance_up_command,
+            settled_since=self.settled_since,
+            reference_depth_m=self.clearance_settle_reference_depth_m,
+        )
+        self.settled_since = clearance.settled_since
+        self.clearance_settle_reference_depth_m = clearance.reference_depth_m
+        if clearance.unsafe_depth_increase:
             return self.abort("离底时深度反而增大，拒绝继续施力", observation)
-
-        error = observation.depth_m - self.target_depth_m
-        if error <= self.config.bottom_clearance_tolerance_m:
-            if self.settled_since is None:
-                self.settled_since = now
-                self.clearance_settle_reference_depth_m = observation.depth_m
-            elif (
-                self.clearance_settle_reference_depth_m is None
-                or abs(
-                    observation.depth_m - self.clearance_settle_reference_depth_m
-                )
-                > self.config.bottom_clearance_tolerance_m
-            ):
-                # 虽然已穿过目标深度，但艇仍在明显上浮时
-                # 不能立即开始转圈；重新计时等待深度稳定。
-                self.settled_since = now
-                self.clearance_settle_reference_depth_m = observation.depth_m
-            if now - self.settled_since >= self.config.bottom_clearance_settle_s:
+        if clearance.reached_target:
+            if clearance.settled:
                 self.search_cycle = 1
                 self._enter(SearchTestState.SCANNING, observation, now)
                 return self._decision(
@@ -1107,10 +1082,8 @@ class SearchApproachMission:
                 "升沉回中等待 ALT_HOLD 稳定",
             )
 
-        self.settled_since = None
-        self.clearance_settle_reference_depth_m = None
         return self._decision(
-            MotionCommand(vertical=self.config.bottom_clearance_up_command),
+            MotionCommand(vertical=clearance.vertical_command),
             observation,
             f"触底后上浮离底：{observation.depth_m:.2f} -> "
             f"{self.target_depth_m:.2f} m",

@@ -1,0 +1,78 @@
+# 0.2.0rc2 群体盲抓与跳跃式离底搜索参数
+#
+# 压力深度不是离底测距。本流程每次换位后都重新触底，
+# 再上浮 0.15m 近似建立搜索高度。短移时无法感知突然隆起地形。
+
+cluster_collection:
+  maximum_operation_depth_m: 20.0
+  mission_timeout_s: 900.0
+
+  bottom_detection_stable_s: 3.0
+  bottom_detection_depth_tolerance_m: 0.05
+  bottom_detection_minimum_descent_m: 0.10
+  bottom_neutral_confirmation_s: 1.0
+  bottom_probe_timeout_s: 45.0
+  bottom_clearance_m: 0.15
+  bottom_clearance_tolerance_m: 0.02
+  bottom_clearance_up_command: 0.40
+  bottom_clearance_settle_s: 1.0
+  bottom_clearance_timeout_s: 15.0
+
+  perception_hold_timeout_s: 1.0
+  perception_abort_timeout_s: 5.0
+  tracking_command_hold_s: 0.20
+
+  scan_yaw_command: 0.40
+  scan_angle_deg: 360.0
+  scan_tolerance_deg: 3.0
+  scan_timeout_s: 120.0
+  maximum_yaw_step_deg: 45.0
+  search_advance_command: 0.40
+  search_advance_duration_s: 2.0
+
+  target_label: "scallop"
+  minimum_cluster_count: 6
+  cluster_link_distance_ratio: 0.18
+  acquisition_window_frames: 5
+  acquisition_required_hits: 3
+  cluster_center_smoothing_alpha: 0.35
+  maximum_tracking_jump_ratio: 0.25
+
+  aim_x_ratio: 0.50
+  # +1 为已实测的非镜像画面：左框左转，右框右转。
+  image_yaw_sign: 1
+  horizontal_tolerance: 0.08
+  realign_threshold: 0.12
+  alignment_frames: 3
+  yaw_gain: 0.80
+  minimum_yaw_command: 0.10
+  maximum_yaw_command: 0.20
+  approach_yaw_command: 0.10
+  far_center_y_ratio: 0.55
+  descent_line_y_ratio: 0.70
+  far_forward_command: 0.20
+  near_forward_command: 0.10
+
+  # 首次实艇只允许 image_line。union_area/both 必须先填现场阈值。
+  descent_trigger: "image_line"
+  union_area_threshold: null
+  descent_window_frames: 5
+  descent_required_hits: 4
+  loss_required_frames: 5
+  loss_confirmation_s: 0.80
+
+  grabs_per_cluster: 3
+  gripper_motion_wait_s: 1.50
+  # 机械组尚未接入网兜动作，当前状态只回中等待并记录。
+  transfer_to_net_wait_s: 1.00
+  inter_grab_forward_command: 0.20
+  inter_grab_duration_s: 0.50
+  leave_cluster_forward_command: 0.40
+  leave_cluster_duration_s: 2.0
+
+  return_gain: 1.00
+  return_minimum_command: 0.40
+  return_maximum_command: 0.60
+  return_tolerance_m: 0.05
+  return_settle_s: 1.0
+  return_timeout_s: 60.0
