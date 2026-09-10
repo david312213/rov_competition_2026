@@ -46,6 +46,7 @@ from .dataset_drive import (
 )
 from .dataset_recording import RtpMkvRecorder, _git_commit, _sha256
 from .domain import MissionObservation, MotionCommand
+from .coverage_collection import CoverageCollectionMission, load_coverage_config
 from .safety import PerceptionFreshness, classify_perception_age
 from .search_approach_runtime import (
     ARM_CONFIRMATION,
@@ -70,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--cluster-config", default=_package_config_path("cluster_collection.yaml")
     )
     parser.add_argument("--session-dir")
+    parser.add_argument("--coverage-config", help="启用半圆搜索与单目标重试策略")
     parser.add_argument("--project-dir", default=str(Path.cwd()))
     parser.add_argument("--record-port", type=int, default=5704)
     parser.add_argument("--payload-type", type=int, default=96)
@@ -244,6 +246,7 @@ class ClusterSessionLogger:
         observation: MissionObservation,
         *,
         config: ClusterCollectionConfig,
+        single_target: bool = False,
     ) -> None:
         utc = datetime.now(timezone.utc).isoformat()
         if not observation.detections:
@@ -270,6 +273,10 @@ class ClusterSessionLogger:
             label=config.target_label,
             link_distance_ratio=config.cluster_link_distance_ratio,
         )
+        if single_target:
+            clusters = tuple(cluster for item in observation.detections
+                for cluster in cluster_scallops((item,), observation.frame_width,
+                    observation.frame_height, label=config.target_label))
         locked_index: int | None = None
         if decision.cluster is not None and clusters:
             locked_index = min(
@@ -379,9 +386,10 @@ class ClusterSessionLogger:
 class ClusterCollectionNode(SearchApproachNode):
     """为群体测试增加状态字段和独立带群中心画面。"""
 
-    def __init__(self, config: ClusterCollectionConfig) -> None:
+    def __init__(self, config: ClusterCollectionConfig, attempt_limit: int = 3) -> None:
         super().__init__(capture_images=True, node_name="rov_cluster_collection_test")
         self.cluster_config = config
+        self.attempt_limit = attempt_limit
         self.cluster_image_publisher = self.create_publisher(
             CompressedImage, "/rov/cluster_image/compressed", 2
         )
@@ -480,7 +488,7 @@ class ClusterCollectionNode(SearchApproachNode):
                     f"CLUSTER state={decision.state.value} visible="
                     f"{decision.visible_scallop_count} locked="
                     f"{0 if cluster is None else cluster.count} grasp="
-                    f"{decision.grasp_attempt_index}/3 groups="
+                    f"{decision.grasp_attempt_index}/{self.attempt_limit} areas="
                     f"{decision.completed_cluster_count}"
                 ),
                 (12, height - 18),
@@ -512,12 +520,14 @@ def _draw_window(
     *,
     paused: bool,
     perception_age_s: float,
+    attempt_limit: int = 3,
+    coverage_mode: bool = False,
 ) -> None:
     screen.fill((17, 24, 39))
     cluster = decision.cluster
     lines = [
-        "ROV CLUSTER COLLECTION TEST",
-        "SPACE neutral/pause | ENTER resume | 0 return+disarm | ESC/close emergency stop",
+        "ROV SEMICIRCLE COLLECTION (ESTIMATED POSITION)" if coverage_mode else "ROV CLUSTER COLLECTION TEST",
+        "SPACE pause | ENTER resume | 0 finish | ESC stop" + (" | T transfer done / allow open" if coverage_mode else ""),
         (
             f"state={decision.state.value} paused={paused} "
             f"frame_age={perception_age_s:.2f}s"
@@ -525,7 +535,7 @@ def _draw_window(
         (
             f"scallops={decision.visible_scallop_count} "
             f"locked={0 if cluster is None else cluster.count} "
-            f"grasp={decision.grasp_attempt_index}/3 "
+            f"grasp={decision.grasp_attempt_index}/{attempt_limit} "
             f"groups={decision.completed_cluster_count}"
         ),
         (
@@ -581,6 +591,9 @@ def main(argv: list[str] | None = None) -> int:
         dataset = load_dataset_config(args.dataset_config)
         autonomy = load_autonomy_config(args.autonomy_config)
         cluster_config = load_cluster_collection_config(args.cluster_config)
+        coverage = load_coverage_config(args.coverage_config) if args.coverage_config else None
+        if coverage is not None:
+            cluster_config = CoverageCollectionMission(cluster_config, coverage).config
     except (ConfigurationError, ClusterCollectionError, ValueError) as exc:
         print(f"配置错误: {exc}")
         return 2
@@ -588,6 +601,11 @@ def main(argv: list[str] | None = None) -> int:
     errors = list(
         cluster_config.readiness_errors(robot_command_limit=robot.command_limit)
     )
+    if coverage is not None:
+        if not coverage.field_calibrated:
+            errors.append("半圆策略尚未确认现场标定 field_calibrated")
+        if max(coverage.search_command, coverage.descent_command, coverage.lift_command) > robot.command_limit:
+            errors.append("半圆策略控制量超过机器人 command_limit")
     if robot.control_profile != ControlProfile.COMMISSIONING:
         errors.append("robot.yaml 的 profile 必须是 commissioning")
     if "ALT_HOLD" not in robot.allowed_flight_modes:
@@ -639,7 +657,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rclpy.init(args=[raw_args[0]], signal_handler_options=SignalHandlerOptions.NO)
     try:
-        node = ClusterCollectionNode(cluster_config)
+        node = ClusterCollectionNode(cluster_config, 3 if coverage is None else coverage.local_attempt_limit)
         node.wait_for_initial_data(timeout_s=10.0)
         node.wait_for_perception(timeout_s=20.0)
         error = _prearm_error(node, dataset, require_disarmed=True, allow_gripper=True)
@@ -665,9 +683,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         recorder.start()
         recorder.wait_until_receiving(timeout_s=10.0, pump=lambda: node.spin(0.0))
-        descent_power, start_depth = _interactive_parameters(
-            node, cluster_config, robot.command_limit
-        )
+        if coverage is None:
+            descent_power, start_depth = _interactive_parameters(node, cluster_config, robot.command_limit)
+        else:
+            if not sys.stdin.isatty():
+                raise DatasetDriveError("半圆策略需要交互终端")
+            print("半圆路径仅为航向+标定速度推算，不能保证位置或实际覆盖。")
+            print(f"直径 {coverage.diameter_m}m；观察压力深度 {coverage.observation_depth_m}m；每处最多 {coverage.local_attempt_limit}次/{coverage.local_timeout_s}s")
+            print("确认起点为第一条内缩搜索带下端、机头沿墙朝上；观察深度及抓取下降量已现场验证。")
+            print("要求现有实艇/QGC/ALT_HOLD/RST条件成立。每次入网兜由人工完成，按 T 才允许重新开爪。")
+            if input("输入 START SEMICIRCLE COLLECTION: ").strip() != "START SEMICIRCLE COLLECTION":
+                raise DatasetDriveError("确认词不匹配")
+            descent_power, start_depth = coverage.descent_command, node.observation().depth_m
+            # 解锁前校验初始观测，避免在解锁后才发现起点不满足条件。
+            CoverageCollectionMission(cluster_config, coverage).start(node.observation(), descent_command=descent_power, now=time.monotonic())
+            (session_dir / "resolved_coverage.json").write_text(json.dumps(vars(coverage), ensure_ascii=False, indent=2), encoding="utf-8")
         selected_errors = cluster_config.readiness_errors(
             robot_command_limit=robot.command_limit,
             descent_command=descent_power,
@@ -696,7 +726,8 @@ def main(argv: list[str] | None = None) -> int:
         if error is not None:
             raise DatasetDriveError(error)
 
-        mission = ClusterCollectionMission(cluster_config)
+        mission = (ClusterCollectionMission(cluster_config) if coverage is None
+                   else CoverageCollectionMission(cluster_config, coverage))
         observation = node.observation()
         started_at = time.monotonic()
         decision = mission.start(
@@ -717,6 +748,7 @@ def main(argv: list[str] | None = None) -> int:
 
         while rclpy.ok():
             normal_finish_requested = False
+            transfer_requested = False
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     raise DatasetDriveError("控制窗口被关闭")
@@ -732,6 +764,8 @@ def main(argv: list[str] | None = None) -> int:
                         raise DatasetDriveError("Esc 急停")
                     if event.key in {pygame.K_0, pygame.K_KP0}:
                         normal_finish_requested = True
+                    if event.key == pygame.K_t and coverage is not None and not paused:
+                        transfer_requested = True
                     if event.key == pygame.K_SPACE:
                         if not paused:
                             pause_started_at = time.monotonic()
@@ -774,6 +808,11 @@ def main(argv: list[str] | None = None) -> int:
                 perception_hold_started_at = None
 
             log_new_frame = observation.frame_id != last_logged_frame
+            if normal_finish_requested and paused:
+                if pause_started_at is not None:
+                    mission.delay_timers(now - pause_started_at)
+                paused = False
+                pause_started_at = None
             if normal_finish_requested and decision.state != ClusterCollectionState.RETURNING:
                 decision = mission.request_normal_finish(
                     observation,
@@ -786,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
                 decision = replace(
                     decision,
                     motion=MotionCommand.neutral(),
+                    gripper_action=None,
                     message="Space/窗口失焦已回中暂停；回到窗口后按 Enter 恢复",
                     current_depth_m=observation.depth_m,
                 )
@@ -793,11 +833,17 @@ def main(argv: list[str] | None = None) -> int:
                 decision = replace(
                     decision,
                     motion=MotionCommand.neutral(),
+                    gripper_action=None,
                     message=f"检测帧暂停 {perception_age:.2f}s，已回中等待",
                     current_depth_m=observation.depth_m,
                 )
             else:
                 decision = mission.step(observation, now)
+
+            if transfer_requested and not paused and not perception_holding and coverage is not None:
+                transfer_decision = mission.confirm_transfer(observation, now)
+                if transfer_decision is not None:
+                    decision = transfer_decision
 
             if decision.gripper_action is not None:
                 logical_action = decision.gripper_action
@@ -863,7 +909,7 @@ def main(argv: list[str] | None = None) -> int:
             # 先让状态机消费这张新帧，再把检测和它导致的群体状态
             # 写在同一行记录中，避免 clusters.csv 落后一帧。
             if log_new_frame:
-                logger.write_frame(decision, observation, config=cluster_config)
+                logger.write_frame(decision, observation, config=cluster_config, single_target=coverage is not None)
                 last_logged_frame = observation.frame_id
 
             reporter.report(decision, observation, now)
@@ -875,6 +921,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 gripper_event = ""
                 next_publish = now + 0.05
+                if coverage is not None:
+                    with (session_dir / "coverage_estimates.jsonl").open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(dict(monotonic_s=now, **mission.snapshot()), ensure_ascii=False) + "\n")
             node.publish_cluster_overlay(decision)
             _draw_window(
                 pygame,
@@ -883,6 +932,8 @@ def main(argv: list[str] | None = None) -> int:
                 decision,
                 paused=paused,
                 perception_age_s=perception_age,
+                attempt_limit=3 if coverage is None else coverage.local_attempt_limit,
+                coverage_mode=coverage is not None,
             )
             if decision.state == ClusterCollectionState.ABORTED:
                 raise DatasetDriveError(decision.message)

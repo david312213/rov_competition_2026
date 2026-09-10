@@ -39,6 +39,10 @@ class ClusterCollectionState(str, Enum):
     """群体收集测试的所有状态。"""
 
     IDLE = "idle"
+    INITIAL_DESCENT = "initial_descent"
+    ROUTE_SEARCH = "route_search"
+    LANE_SHIFT = "lane_shift"
+    LOCAL_REOBSERVE = "local_reobserve"
     PROBING_BOTTOM = "probing_bottom"
     CLEARING_BOTTOM = "clearing_bottom"
     SCANNING = "scanning"
@@ -1333,6 +1337,10 @@ class ClusterCollectionMission:
 
 
 STATE_DISPLAY_NAMES = {
+    ClusterCollectionState.INITIAL_DESCENT: "下潜至已确认观察深度",
+    ClusterCollectionState.ROUTE_SEARCH: "半圆搜索带（推算）",
+    ClusterCollectionState.LANE_SHIFT: "半圆换行（推算）",
+    ClusterCollectionState.LOCAL_REOBSERVE: "局部重新观察",
     ClusterCollectionState.IDLE: "等待启动",
     ClusterCollectionState.PROBING_BOTTOM: "搜索前触底标定",
     ClusterCollectionState.CLEARING_BOTTOM: "上浮 15cm 离底",
@@ -1397,7 +1405,7 @@ class ClusterStateReporter:
             )
             print(
                 f"[状态进度] {decision.state.name} | depth={observation.depth_m:.2f}m | "
-                f"{cluster_text} | grasp={decision.grasp_attempt_index}/3 | "
+                f"{cluster_text} | grasp_attempt={decision.grasp_attempt_index} | "
                 f"groups={decision.completed_cluster_count} | {decision.message}",
                 flush=True,
             )

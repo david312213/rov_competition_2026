@@ -323,7 +323,12 @@ echo "QGC 继续显示 5600 原始画面；关闭带框窗口不会中止任务�
 
 set +e
 if [[ "${WORKFLOW}" == "cluster_collection" ]]; then
+  COVERAGE_ARGS=()
+  if [[ -n "${COVERAGE_CONFIG:-}" ]]; then
+    COVERAGE_ARGS=(--coverage-config "${COVERAGE_CONFIG}")
+  fi
   ros2 run rov_competition rov_cluster_collection_test \
+    "${COVERAGE_ARGS[@]}" \
     --robot-config "${RUNTIME_ROBOT_CONFIG}" \
     --dataset-config "${DATASET_CONFIG}" \
     --autonomy-config "${AUTONOMY_CONFIG}" \

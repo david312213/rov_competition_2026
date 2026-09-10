@@ -1,0 +1,41 @@
+# 待实测模板。null 必须填写，不能直接用于实艇。
+# 场地约10m是用户初步描述，不是测量结果，因此不填默认直径。
+coverage:
+  diameter_m: null
+  wall_clearance_m: null
+  edge_margin_m: null
+  lane_spacing_m: null
+  waypoint_tolerance_m: null
+  search_command: null
+  search_speed_mps: null
+  # 与 cluster_collection.yaml 中 far/near_forward_command 配套实测。
+  far_speed_mps: null
+  near_speed_mps: null
+  heading_tolerance_deg: null
+  heading_gain: null
+  turn_timeout_s: null
+  segment_timeout_s: null
+  max_tick_gap_s: null
+  max_heading_step_deg: null
+  max_estimated_travel_m: null
+  max_local_travel_m: null
+  revisit_suppression_m: null
+  local_attempt_limit: null
+  local_timeout_s: null
+  reobserve_timeout_s: null
+  # 压力深度，不是离底高度；必须人工检查当前地形适用性。
+  observation_depth_m: null
+  depth_tolerance_m: null
+  descent_command: null
+  lift_command: null
+  descent_timeout_s: null
+  depth_settle_s: null
+  grasp_descent_m: null
+  transfer_timeout_s: null
+  mission_timeout_s: null
+  maximum_operation_depth_m: null
+  image_yaw_sign: null
+  aim_x_ratio: null
+  descent_line_y_ratio: null
+  far_center_y_ratio: null
+  field_calibrated: false
