@@ -38,6 +38,8 @@ setup(
             "rov_preflight = rov_competition.preflight_cli:main",
             "rov_stream_bridge = rov_competition.stream_bridge:main",
             "rov_turn_test = rov_competition.turn_test:main",
+            "rov_timed_turn_test = rov_competition.timed_turn_test:main",
+            "rov_direct_motion = rov_competition.direct_motion_console:main",
             "rov_vehicle = rov_competition.ros_nodes.vehicle_gateway_node:main",
         ],
     },
