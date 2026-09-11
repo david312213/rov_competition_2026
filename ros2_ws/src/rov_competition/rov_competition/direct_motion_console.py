@@ -84,7 +84,7 @@ def _drive_until_stopped(
 ) -> None:
     period_s = 1.0 / PUBLISH_RATE_HZ
     while rclpy.ok() and not stop_event.is_set():
-        rclpy.spin_once(node, timeout_sec=0.0)
+        node.spin(0.0)
         error = node.runtime_error()
         if error is not None:
             error_box.append(error)

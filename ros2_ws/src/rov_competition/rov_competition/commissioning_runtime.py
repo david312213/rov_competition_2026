@@ -42,6 +42,17 @@ class CommissioningNode(Node):
         self.status = message
         self.status_received_at = time.monotonic()
 
+    def spin(self, timeout_s: float = 0.0) -> None:
+        """处理 ROS 回调，并清掉短暂停顿期间积压的状态消息。
+
+        群体搜寻运行时也采用同样方式：若每次只处理一个回调，遥测和
+        控制状态可能还滞留在 DDS 队列内，随后被本地新鲜度检查误判为过期。
+        """
+
+        rclpy.spin_once(self, timeout_sec=timeout_s)
+        for _ in range(7):
+            rclpy.spin_once(self, timeout_sec=0.0)
+
     def message(self, motion: MotionCommand) -> NormalizedMotionCommand:
         """生成带当前 ROS 时间戳和固定来源的命令。"""
 
@@ -64,7 +75,7 @@ class CommissioningNode(Node):
 
         deadline = time.monotonic() + timeout_s
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.spin(0.05)
             if (
                 self.publisher.get_subscription_count() > 0
                 and self.telemetry is not None
@@ -128,7 +139,7 @@ class CommissioningNode(Node):
             if not rclpy.ok():
                 break
             self.publish(MotionCommand.neutral())
-            rclpy.spin_once(self, timeout_sec=0.0)
+            self.spin(0.0)
             time.sleep(period_s)
 
     def request_normal_disarm(self, timeout_s: float = 3.0) -> str | None:
@@ -142,7 +153,7 @@ class CommissioningNode(Node):
         future = self.disarm_client.call_async(request)
         deadline = time.monotonic() + timeout_s
         while rclpy.ok() and not future.done() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            self.spin(0.05)
         if not future.done():
             return "正常上锁服务响应超时"
         try:
