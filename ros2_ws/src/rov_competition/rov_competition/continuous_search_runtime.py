@@ -36,9 +36,6 @@ from .search_approach_runtime import SearchApproachNode, _package_config_path
 from .semicircle_search import SearchAction, SearchConfig, SearchState, SemicircleSearchMission
 
 
-CONFIRMATION = "START CONTINUOUS SEARCH"
-
-
 def _default_search_config_path() -> str:
     return _package_config_path("continuous_search.yaml")
 
@@ -191,9 +188,8 @@ def main(argv: list[str] | None = None) -> int:
         font = pygame.font.Font(None, 27)
         print("连续搜寻不会调用机械爪、群体盲抓或抓取策略。")
         print(f"T 后：触底 → 上浮 {search.clearance_m:.2f}m → 自动定时蛇形；稳定发现 {search.target_label} 后仅停车。")
-        print("确认 ROV 已浸没、危险区无人、QGC 为 ALT_HOLD、QGC 遥测与视频正常，且可立即人工上锁。")
-        if input(f"全部满足后完整输入 {CONFIRMATION!r}: ").strip() != CONFIRMATION:
-            raise DatasetDriveError("确认词不匹配，未开启控制")
+        print("请确认 ROV 已浸没、危险区无人、QGC 为 ALT_HOLD、QGC 遥测与视频正常，且可立即人工上锁。")
+        print("无需输入确认词；进入窗口后按 T 才会开始触底定高。")
 
         for _ in range(5):
             node.publish(MotionCommand.neutral())
