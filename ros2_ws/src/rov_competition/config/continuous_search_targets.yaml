@@ -1,0 +1,9 @@
+# 连续自动搜寻只需要识别扇贝。它不调用抓取状态机，故不沿用通用
+# targets.yaml 中尚未完成阈值配置的其他类别。
+graspable_labels:
+  - "scallop"
+
+display_names:
+  scallop: "扇贝"
+
+unsupported_scoring_targets: []

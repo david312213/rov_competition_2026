@@ -20,6 +20,7 @@ TARGETS_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/targets.yaml"
 SEARCH_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/search_test.yaml"
 CLUSTER_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/cluster_collection.yaml"
 CONTINUOUS_SEARCH_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/continuous_search.yaml"
+CONTINUOUS_SEARCH_TARGETS_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/continuous_search_targets.yaml"
 
 ROV_IP="${ROV_IP:-192.168.2.2}"
 TOPSIDE_IP="${TOPSIDE_IP:-192.168.2.1}"
@@ -104,7 +105,7 @@ trap 'exit 143' TERM
 
 for required in \
   "${ROS_SETUP}" "${VENV_SETUP}" "${WORKSPACE_SETUP}" "${ROBOT_CONFIG}" \
-  "${AUTONOMY_TEMPLATE}" "${TARGETS_CONFIG}" "${SEARCH_CONFIG}" "${CLUSTER_CONFIG}" "${CONTINUOUS_SEARCH_CONFIG}"; do
+  "${AUTONOMY_TEMPLATE}" "${TARGETS_CONFIG}" "${SEARCH_CONFIG}" "${CLUSTER_CONFIG}" "${CONTINUOUS_SEARCH_CONFIG}" "${CONTINUOUS_SEARCH_TARGETS_CONFIG}"; do
   [[ -r "${required}" ]] || { echo "缺少必要文件：${required}" >&2; exit 1; }
 done
 if [[ ! -r "${DATASET_CONFIG}" ]]; then
@@ -210,6 +211,10 @@ if [[ "${WORKFLOW}" == "manual_grasp_calibration" || "${WORKFLOW}" == "cluster_c
 else
   RUNTIME_MODE="auto"
 fi
+PERCEPTION_TARGETS_CONFIG="${TARGETS_CONFIG}"
+if [[ "${WORKFLOW}" == "continuous_search" ]]; then
+  PERCEPTION_TARGETS_CONFIG="${CONTINUOUS_SEARCH_TARGETS_CONFIG}"
+fi
 ros2 run rov_competition rov_field_setup \
   --project-dir "${PROJECT_DIR}" runtime-config \
   --mode "${RUNTIME_MODE}" \
@@ -274,7 +279,7 @@ kill -0 "${BRIDGE_PID}" 2>/dev/null || { tail -n 80 "${SESSION_DIR}/logs/video_b
 ros2 launch rov_competition perception_only.launch.py \
   robot_config:="${RUNTIME_ROBOT_CONFIG}" \
   autonomy_config:="${AUTONOMY_CONFIG}" \
-  targets_config:="${TARGETS_CONFIG}" \
+  targets_config:="${PERCEPTION_TARGETS_CONFIG}" \
   ai_port:="${YOLO_VIDEO_PORT}" \
   >"${SESSION_DIR}/logs/perception.log" 2>&1 &
 PERCEPTION_PID=$!
