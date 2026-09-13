@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -31,6 +32,20 @@ from .direct_motion import (
 
 EXECUTION_CONFIRMATION = "DIRECT MOTION"
 QUIT_WORDS = {"q", "quit", "exit"}
+DIAGNOSTIC_FIELDS = (
+    "stop_kind", "stop_reason", "stopped_monotonic_s",
+    "telemetry_callback_age_s", "status_callback_age_s", "telemetry_ros_stamp",
+    "heartbeat_age_s", "message_age_s", "valid_heartbeat", "valid_attitude",
+    "valid_depth", "gateway_state", "gateway_runtime_enabled",
+)
+
+
+@dataclass(frozen=True)
+class StopDetails:
+    stopped_at: float
+    kind: str
+    reason: str
+    diagnostics: dict[str, str]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,7 +70,7 @@ def _record_path(record_dir: str) -> Path:
 
 def _append_record(
     path: Path, *, action: str, value: float, held_s: float,
-    start_telemetry: str, end_telemetry: str, note: str,
+    start_telemetry: str, end_telemetry: str, note: str, stop: StopDetails,
 ) -> None:
     new_file = not path.exists()
     with path.open("a", newline="", encoding="utf-8") as handle:
@@ -63,7 +78,7 @@ def _append_record(
             handle,
             fieldnames=(
                 "recorded_at", "action", "value", "held_seconds", "start_telemetry",
-                "end_telemetry", "observed_effect",
+                "end_telemetry", "observed_effect", *DIAGNOSTIC_FIELDS,
             ),
         )
         if new_file:
@@ -76,18 +91,54 @@ def _append_record(
             "start_telemetry": start_telemetry,
             "end_telemetry": end_telemetry,
             "observed_effect": note,
+            **stop.diagnostics,
         })
 
 
+def _diagnostics(node: CommissioningNode, now: float) -> dict[str, str]:
+    """冻结本地回调时间与最后一条网关遥测，供故障归因使用。"""
+
+    telemetry = node.telemetry
+    status = node.status
+    def age(received_at: float | None) -> str:
+        return "UNKNOWN" if received_at is None else f"{max(0.0, now - received_at):.3f}"
+
+    stamp = "UNKNOWN"
+    if telemetry is not None:
+        stamp = f"{telemetry.stamp.sec}.{telemetry.stamp.nanosec:09d}"
+    return {
+        "stop_kind": "operator" ,
+        "stop_reason": "operator_enter",
+        "stopped_monotonic_s": f"{now:.6f}",
+        "telemetry_callback_age_s": age(node.telemetry_received_at),
+        "status_callback_age_s": age(node.status_received_at),
+        "telemetry_ros_stamp": stamp,
+        "heartbeat_age_s": "UNKNOWN" if telemetry is None else f"{telemetry.heartbeat_age_s:.3f}",
+        "message_age_s": "UNKNOWN" if telemetry is None else f"{telemetry.message_age_s:.3f}",
+        "valid_heartbeat": "UNKNOWN" if telemetry is None else str(bool(telemetry.valid_heartbeat)),
+        "valid_attitude": "UNKNOWN" if telemetry is None else str(bool(telemetry.valid_attitude)),
+        "valid_depth": "UNKNOWN" if telemetry is None else str(bool(telemetry.valid_depth)),
+        "gateway_state": "UNKNOWN" if status is None else status.state,
+        "gateway_runtime_enabled": "UNKNOWN" if status is None else str(bool(status.runtime_enabled)),
+    }
+
+
+def _stop_details(node: CommissioningNode, now: float, *, kind: str, reason: str) -> StopDetails:
+    diagnostics = _diagnostics(node, now)
+    diagnostics["stop_kind"] = kind
+    diagnostics["stop_reason"] = reason
+    return StopDetails(now, kind, reason, diagnostics)
+
+
 def _drive_until_stopped(
-    node: CommissioningNode, motion, stop_event: threading.Event, error_box: list[str],
+    node: CommissioningNode, motion, stop_event: threading.Event, stop_box: list[StopDetails],
 ) -> None:
     period_s = 1.0 / PUBLISH_RATE_HZ
     while rclpy.ok() and not stop_event.is_set():
         node.spin(0.0)
         error = node.runtime_error()
         if error is not None:
-            error_box.append(error)
+            stop_box.append(_stop_details(node, time.monotonic(), kind="runtime_protection", reason=error))
             stop_event.set()
             break
         node.publish(motion)
@@ -156,25 +207,32 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             start_telemetry = _telemetry_text(node)
             stop_event = threading.Event()
-            error_box: list[str] = []
+            stop_box: list[StopDetails] = []
             started_at = time.monotonic()
             worker = threading.Thread(
                 target=_drive_until_stopped,
-                args=(node, plan.motion, stop_event, error_box), daemon=True,
+                args=(node, plan.motion, stop_event, stop_box), daemon=True,
             )
             worker.start()
             input(f"正在持续 {plan.action}，推进力 {plan.value:.3f}；按回车立即停止。")
+            operator_stop_at = time.monotonic()
             stop_event.set()
             worker.join(timeout=1.0)
             node.publish_neutral()
-            held_s = time.monotonic() - started_at
+            stop = stop_box[0] if stop_box else _stop_details(
+                node, operator_stop_at, kind="operator", reason="operator_enter",
+            )
+            held_s = max(0.0, stop.stopped_at - started_at)
             end_telemetry = _telemetry_text(node)
-            if error_box:
-                print(f"已因运行时保护停止: {error_box[0]}")
+            if stop.kind == "runtime_protection":
+                print(f"已因运行时保护停止: {stop.reason}")
+                print("停止诊断：" + ", ".join(
+                    f"{key}={value}" for key, value in stop.diagnostics.items()
+                ))
             note = input("观察到的效果（可留空）：").strip()
             _append_record(
                 record, action=plan.action, value=plan.value, held_s=held_s,
-                start_telemetry=start_telemetry, end_telemetry=end_telemetry, note=note,
+                start_telemetry=start_telemetry, end_telemetry=end_telemetry, note=note, stop=stop,
             )
             print(f"已回中并记录：保持 {held_s:.2f}s。")
             copyable = format_measurement_result(
@@ -182,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
                 value=plan.value,
                 held_s=held_s,
                 observed_effect=note,
+                stop_reason=(stop.reason if stop.kind == "runtime_protection" else None),
             )
             session_results.append(copyable)
             print("请复制以下内容发给我：")

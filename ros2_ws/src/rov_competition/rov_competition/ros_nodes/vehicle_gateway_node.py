@@ -81,6 +81,7 @@ class VehicleGatewayNode(Node):
         self._last_command = MotionCommand.neutral()
         self._last_command_source = ""
         self._last_warning: tuple[str, float] | None = None
+        self._last_telemetry_publish_monotonic: float | None = None
         self._destroying = False
 
         self._vehicle = MavlinkVehicle(self._config)
@@ -585,6 +586,11 @@ class VehicleGatewayNode(Node):
             return
 
         now = time.monotonic()
+        previous_publish = self._last_telemetry_publish_monotonic
+        self._last_telemetry_publish_monotonic = now
+        publish_gap_s = (
+            None if previous_publish is None else max(0.0, now - previous_publish)
+        )
         stale_timeout = self._config.telemetry_stale_timeout_s
         depth_fresh = is_fresh_telemetry(
             snapshot.depth_updated_monotonic, now, stale_timeout
@@ -633,6 +639,11 @@ class VehicleGatewayNode(Node):
             else max(0.0, now - snapshot.last_message_monotonic)
         )
         self._telemetry_publisher.publish(message)
+        self._report_telemetry_diagnostics(
+            snapshot,
+            now=now,
+            publish_gap_s=publish_gap_s,
+        )
         self._publish_scalar_topics(
             snapshot,
             depth_fresh=depth_fresh,
@@ -683,6 +694,38 @@ class VehicleGatewayNode(Node):
         if snapshot.flight_mode is not None:
             self._scalar_publishers["mode"].publish(String(data=snapshot.flight_mode))
 
+    def _report_telemetry_diagnostics(
+        self, snapshot, *, now: float, publish_gap_s: float | None,
+    ) -> None:
+        """只读记录遥测来源或网关执行器的异常间隙，不影响控制决策。"""
+
+        if not self._runtime_enabled:
+            return
+        message_age = (
+            None
+            if snapshot.last_message_monotonic is None
+            else max(0.0, now - snapshot.last_message_monotonic)
+        )
+        heartbeat_age = (
+            None
+            if snapshot.last_heartbeat_monotonic is None
+            else max(0.0, now - snapshot.last_heartbeat_monotonic)
+        )
+        if message_age is None or message_age > self._config.telemetry_stale_timeout_s:
+            self._warn_throttled(
+                "MAVLink 遥测诊断："
+                f"message_age={message_age if message_age is not None else 'UNKNOWN'}，"
+                f"heartbeat_age={heartbeat_age if heartbeat_age is not None else 'UNKNOWN'}",
+                key="mavlink_telemetry_diagnostic",
+            )
+        if publish_gap_s is not None and publish_gap_s > 0.25:
+            self._warn_throttled(
+                "ROS 网关遥测发布间隙诊断："
+                f"publish_gap={publish_gap_s:.3f}s，"
+                f"message_age={message_age if message_age is not None else 'UNKNOWN'}",
+                key="ros_telemetry_publish_gap",
+            )
+
     def _publish_control_status(self) -> None:
         """发布可以直接作为现场验收证据的控制门控状态。"""
 
@@ -705,17 +748,20 @@ class VehicleGatewayNode(Node):
         message.reason = self._reason
         self._status_publisher.publish(message)
 
-    def _warn_throttled(self, message: str, interval_s: float = 2.0) -> None:
+    def _warn_throttled(
+        self, message: str, interval_s: float = 2.0, *, key: str | None = None,
+    ) -> None:
         """同一告警在指定时间内只打印一次，避免高频话题淹没根因。"""
 
         now = time.monotonic()
+        throttle_key = key or message
         if (
             self._last_warning is None
-            or self._last_warning[0] != message
+            or self._last_warning[0] != throttle_key
             or now - self._last_warning[1] >= interval_s
         ):
             self.get_logger().warning(message)
-            self._last_warning = (message, now)
+            self._last_warning = (throttle_key, now)
 
     def destroy_node(self) -> bool:
         """网关退出时尝试回中、正常上锁、释放控制并关闭连接。"""

@@ -19,6 +19,7 @@ AUTONOMY_CONFIG="${AUTONOMY_CONFIG:-${AUTONOMY_TEMPLATE}}"
 TARGETS_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/targets.yaml"
 SEARCH_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/search_test.yaml"
 CLUSTER_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/cluster_collection.yaml"
+CONTINUOUS_SEARCH_CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/continuous_search.yaml"
 
 ROV_IP="${ROV_IP:-192.168.2.2}"
 TOPSIDE_IP="${TOPSIDE_IP:-192.168.2.1}"
@@ -38,12 +39,13 @@ CLEANED_UP=false
 
 usage() {
   printf '%s\n' \
-    '用法：./scripts/start_search_approach_test.sh [--workflow auto_approach|manual_grasp_calibration|cluster_collection]' \
+    '用法：./scripts/start_search_approach_test.sh [--workflow auto_approach|manual_grasp_calibration|cluster_collection|continuous_search]' \
     '' \
     'auto_approach：自动下潜、扫描、对准、接近，然后回收。' \
     'manual_grasp_calibration：自动对准后停车，进入 WASD 抓取位置标定。' \
     'cluster_collection：触底、离底搜索、群体靠近和每群三次盲抓。' \
-    '三个模式都会在解锁前询问下潜 power 和确认词。' \
+    'continuous_search：触底、离底、自动定时蛇形搜索；发现目标后仅停车，不抓取。' \
+    '每个模式都在解锁前要求现场确认；连续搜寻还会询问每带前进秒数和自动上浮分钟数。' \
     '单目标流程离底 0.10m；群体收集流程每次重新触底后离底 0.15m。'
 }
 while (($# > 0)); do
@@ -64,7 +66,7 @@ while (($# > 0)); do
       ;;
   esac
 done
-if [[ "${WORKFLOW}" != "auto_approach" && "${WORKFLOW}" != "manual_grasp_calibration" && "${WORKFLOW}" != "cluster_collection" ]]; then
+if [[ "${WORKFLOW}" != "auto_approach" && "${WORKFLOW}" != "manual_grasp_calibration" && "${WORKFLOW}" != "cluster_collection" && "${WORKFLOW}" != "continuous_search" ]]; then
   echo "未知工作流：${WORKFLOW}" >&2
   exit 2
 fi
@@ -102,7 +104,7 @@ trap 'exit 143' TERM
 
 for required in \
   "${ROS_SETUP}" "${VENV_SETUP}" "${WORKSPACE_SETUP}" "${ROBOT_CONFIG}" \
-  "${AUTONOMY_TEMPLATE}" "${TARGETS_CONFIG}" "${SEARCH_CONFIG}" "${CLUSTER_CONFIG}"; do
+  "${AUTONOMY_TEMPLATE}" "${TARGETS_CONFIG}" "${SEARCH_CONFIG}" "${CLUSTER_CONFIG}" "${CONTINUOUS_SEARCH_CONFIG}"; do
   [[ -r "${required}" ]] || { echo "缺少必要文件：${required}" >&2; exit 1; }
 done
 if [[ ! -r "${DATASET_CONFIG}" ]]; then
@@ -180,7 +182,7 @@ ping -c 3 -W 2 "${ROV_IP}" >/dev/null || { echo "无法连通 ${ROV_IP}" >&2; ex
 for port in "${ROS_MAVLINK_PORT}" "${SOFTWARE_VIDEO_PORT}" "${YOLO_VIDEO_PORT}" "${RECORD_VIDEO_PORT}"; do
   ensure_free_port "${port}"
 done
-if ros2 node list 2>/dev/null | grep -Eq '^/(rov_vehicle_gateway|rov_dataset_drive|rov_autonomy|rov_search_perception|rov_search_approach_test|rov_cluster_collection_test)$'; then
+if ros2 node list 2>/dev/null | grep -Eq '^/(rov_vehicle_gateway|rov_dataset_drive|rov_autonomy|rov_search_perception|rov_search_approach_test|rov_cluster_collection_test|rov_continuous_search)$'; then
   echo "检测到旧的飞控/感知/控制节点，请先 Ctrl+C。" >&2
   exit 1
 fi
@@ -192,6 +194,9 @@ if [[ "${WORKFLOW}" == "manual_grasp_calibration" ]]; then
 elif [[ "${WORKFLOW}" == "cluster_collection" ]]; then
   SESSION_ROOT="${PROJECT_DIR}/output/cluster_collection_tests"
   MODE_TITLE="群体盲抓与跳跃式离底搜索"
+elif [[ "${WORKFLOW}" == "continuous_search" ]]; then
+  SESSION_ROOT="${PROJECT_DIR}/output/continuous_search_tests"
+  MODE_TITLE="连续自动蛇形搜寻"
 else
   SESSION_ROOT="${PROJECT_DIR}/output/search_tests"
   MODE_TITLE="搜索—自动接近"
@@ -335,6 +340,16 @@ if [[ "${WORKFLOW}" == "cluster_collection" ]]; then
     --cluster-config "${CLUSTER_CONFIG}" \
     --session-dir "${SESSION_DIR}" \
     --project-dir "${PROJECT_DIR}" \
+    --record-port "${RECORD_VIDEO_PORT}" \
+    --execute
+  TEST_STATUS=$?
+elif [[ "${WORKFLOW}" == "continuous_search" ]]; then
+  ros2 run rov_competition rov_continuous_search \
+    --robot-config "${RUNTIME_ROBOT_CONFIG}" \
+    --dataset-config "${DATASET_CONFIG}" \
+    --autonomy-config "${AUTONOMY_CONFIG}" \
+    --search-config "${CONTINUOUS_SEARCH_CONFIG}" \
+    --session-dir "${SESSION_DIR}" \
     --record-port "${RECORD_VIDEO_PORT}" \
     --execute
   TEST_STATUS=$?

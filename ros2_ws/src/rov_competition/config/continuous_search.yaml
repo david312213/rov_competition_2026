@@ -1,0 +1,32 @@
+# 连续蛇形搜寻：不含抓取、机械爪和转运。
+# 每次运行前由程序询问“每带前进秒数”和“自动上浮倒计时分钟数”，不在此写死。
+continuous_search:
+  target_label: scallop
+  target_confidence: 0.18
+  # 视觉接入前该项不会参与实际路径控制；后续由抓取策略确认。
+  target_required_hits: 2
+  target_minimum_iou: 0.05
+
+  # 已按本次实艇测量填写。
+  forward_command: 0.13
+  shift_command: 0.20
+  shift_duration_s: 4.5
+  small_yaw_left_command: 0.15
+  small_yaw_left_duration_s: 4.06
+  small_yaw_right_command: 0.15
+  small_yaw_right_duration_s: 4.31
+  turn_command: 0.20
+  turn_duration_s: 11.5
+  descent_command: 0.315
+  ascent_command: 0.315
+
+  # 以下为原 search_test.yaml 的触底基线，尚未完成本次实艇确认。
+  probe_timeout_s: 45.0
+  minimum_descent_m: 0.10
+  stable_depth_tolerance_m: 0.05
+  stable_duration_s: 3.0
+  neutral_confirmation_s: 1.0
+  clearance_m: 0.10
+  clearance_tolerance_m: 0.02
+  clearance_settle_s: 1.0
+  clearance_timeout_s: 15.0

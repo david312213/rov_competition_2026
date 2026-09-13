@@ -43,3 +43,10 @@ def test_measurement_result_is_copyable_and_keeps_the_entered_values():
     assert "推进力：0.0800" in result
     assert "实际保持：1.23 s" in result
     assert "观察结果：平稳" in result
+
+
+def test_measurement_result_keeps_a_runtime_protection_reason():
+    result = format_measurement_result(
+        action="down", value=.315, held_s=1.5, observed_effect="", stop_reason="遥测数据过期",
+    )
+    assert "停止原因：遥测数据过期" in result

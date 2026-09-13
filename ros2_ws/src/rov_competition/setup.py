@@ -40,6 +40,7 @@ setup(
             "rov_turn_test = rov_competition.turn_test:main",
             "rov_timed_turn_test = rov_competition.timed_turn_test:main",
             "rov_direct_motion = rov_competition.direct_motion_console:main",
+            "rov_continuous_search = rov_competition.continuous_search_runtime:main",
             "rov_vehicle = rov_competition.ros_nodes.vehicle_gateway_node:main",
         ],
     },

@@ -48,15 +48,21 @@ def build_direct_motion_plan(
 
 def format_measurement_result(
     *, action: str, value: float, held_s: float, observed_effect: str,
+    stop_reason: str | None = None,
 ) -> str:
     """生成便于复制到沟通窗口的单条实艇结果。"""
 
     effect = observed_effect or "未填写"
-    return "\n".join((
+    rows = [
         "--- ROV 推进力记录 ---",
         f"动作：{action}",
         f"推进力：{value:.4f}",
         f"实际保持：{held_s:.2f} s",
+    ]
+    if stop_reason:
+        rows.append(f"停止原因：{stop_reason}")
+    rows.extend((
         f"观察结果：{effect}",
         "--- 记录结束 ---",
     ))
+    return "\n".join(rows)
