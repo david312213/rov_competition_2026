@@ -231,12 +231,7 @@ def main(argv: list[str] | None = None) -> int:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     raise DatasetDriveError("控制窗口被关闭")
-                if event.type in {getattr(pygame, "WINDOWFOCUSLOST", -1)} or (
-                    event.type == pygame.ACTIVEEVENT and getattr(event, "gain", 1) == 0
-                ):
-                    if mission.state is not SearchState.PAUSED:
-                        action = SearchAction.PAUSE_TOGGLE
-                elif event.type == pygame.KEYDOWN:
+                if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         raise DatasetDriveError("Esc 急停")
                     action = _event_action(pygame, event.key)
