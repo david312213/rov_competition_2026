@@ -47,6 +47,7 @@ class SearchConfig:
     target_confidence: float
     target_required_hits: int
     target_minimum_iou: float
+    stop_on_stable_target: bool
     forward_command: float
     shift_command: float
     shift_duration_s: float
@@ -79,9 +80,11 @@ class SearchConfig:
             raise ValueError("目标连续命中帧数至少为 1")
         if not 0.0 <= self.target_minimum_iou <= 1.0:
             raise ValueError("目标 IoU 必须在 [0, 1]")
+        if not isinstance(self.stop_on_stable_target, bool):
+            raise ValueError("stop_on_stable_target 必须为布尔值")
         non_motion = {
             "target_label", "target_required_hits", "target_confidence",
-            "target_minimum_iou",
+            "target_minimum_iou", "stop_on_stable_target",
         }
         for name, value in vars(self).items():
             if name not in non_motion and (
@@ -305,7 +308,7 @@ class SemicircleSearchMission:
             self.state = SearchState.LANE_SHIFTING
             self.state_started_at = now
             return self._out(self._lane_shift_motion(), "本带定时结束：自动横移换带")
-        if observation.frame_id != self.last_frame_id:
+        if self.config.stop_on_stable_target and observation.frame_id != self.last_frame_id:
             self.last_frame_id = observation.frame_id
             candidates = [d for d in observation.detections if d.label == self.config.target_label and d.confidence >= self.config.target_confidence]
             if candidates:

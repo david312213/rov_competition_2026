@@ -6,6 +6,8 @@ continuous_search:
   # 视觉接入前该项不会参与实际路径控制；后续由抓取策略确认。
   target_required_hits: 2
   target_minimum_iou: 0.05
+  # 当前水池中贝壳密集，先只验证连续搜索路径，不因检测到扇贝停车。
+  stop_on_stable_target: false
 
   # 已按本次实艇测量填写。
   forward_command: 0.23

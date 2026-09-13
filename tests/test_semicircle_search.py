@@ -9,6 +9,7 @@ from rov_competition.semicircle_search import SearchAction, SearchConfig, Search
 def _config() -> SearchConfig:
     return SearchConfig(
         target_label="scallop", target_confidence=.18, target_required_hits=2, target_minimum_iou=.05,
+        stop_on_stable_target=True,
         forward_command=.13, shift_command=.20, shift_duration_s=4.5,
         small_yaw_left_command=.15, small_yaw_left_duration_s=4.06,
         small_yaw_right_command=.15, small_yaw_right_duration_s=4.31,
@@ -95,6 +96,18 @@ def test_stable_scallop_stops_and_does_not_call_a_grasp_path():
     held = mission.step(_observation(frame_id=2, detections=(detection,)), 2.)
     assert held.state is SearchState.TARGET_HELD
     assert held.motion.is_neutral()
+
+
+def test_stable_scallop_does_not_stop_when_target_stop_is_disabled():
+    config = SearchConfig(**{**_config().__dict__, "stop_on_stable_target": False})
+    mission = SemicircleSearchMission(config)
+    mission.state = SearchState.SEARCHING
+    mission.height_established = True
+    mission.search_started_at = mission.lane_started_at = 0.
+    detection = Detection(2, "scallop", .90, BoundingBox(100, 100, 200, 200))
+    decision = mission.step(_observation(frame_id=1, detections=(detection,)), 1.)
+    assert decision.state is SearchState.SEARCHING
+    assert decision.motion.forward == pytest.approx(.13)
 
 
 def test_surface_has_priority_and_only_outputs_ascent():
