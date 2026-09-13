@@ -31,7 +31,7 @@ from .dataset_drive import (
     _wait_for_gateway_state,
 )
 from .dataset_recording import RtpMkvRecorder
-from .domain import MotionCommand
+from .domain import MissionObservation, MotionCommand
 from .search_approach_runtime import SearchApproachNode, _package_config_path
 from .semicircle_search import SearchAction, SearchConfig, SearchState, SemicircleSearchMission
 
@@ -95,6 +95,25 @@ def _draw(
         surface = font.render(row, True, (236, 239, 244) if index != 5 else (253, 205, 79))
         screen.blit(surface, (26, 25 + 48 * index))
     pygame.display.flip()
+
+
+def _print_live_status(
+    mission: SemicircleSearchMission, observation: MissionObservation, node: SearchApproachNode, message: str,
+) -> None:
+    """每秒输出一行可复制的现场状态，不改变任何控制命令。"""
+
+    status = node.status
+    mode = "UNKNOWN" if status is None else str(status.flight_mode)
+    armed = "UNKNOWN" if status is None else str(bool(status.armed))
+    runtime_enabled = "UNKNOWN" if status is None else str(bool(status.runtime_enabled))
+    print(
+        "[连续搜寻状态] "
+        f"state={mission.state.value} lane={mission.lane_index + 1} "
+        f"direction={'forward' if mission.forward_direction else 'reverse'} "
+        f"depth={observation.depth_m:.2f}m detections={len(observation.detections)} "
+        f"mode={mode} armed={armed} runtime_enabled={runtime_enabled} | {message}",
+        flush=True,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -206,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         mission = SemicircleSearchMission(search)
         message = "待命：点击本窗口后按 T，开始触底定高与自动搜寻"
         clock = pygame.time.Clock()
+        next_status_report_at = 0.0
         while rclpy.ok():
             action = None
             for event in pygame.event.get():
@@ -225,9 +245,13 @@ def main(argv: list[str] | None = None) -> int:
             if error is not None:
                 raise DatasetDriveError(error)
             now = time.monotonic()
-            decision = mission.step(node.observation(now), now, action)
+            observation = node.observation(now)
+            decision = mission.step(observation, now, action)
             message = decision.message
             node.publish(decision.motion)
+            if now >= next_status_report_at:
+                _print_live_status(mission, observation, node, message)
+                next_status_report_at = now + 1.0
             _draw(pygame, screen, font, mission, message, lane_seconds, surface_minutes)
             clock.tick(20)
     except KeyboardInterrupt:
