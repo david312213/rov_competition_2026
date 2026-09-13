@@ -8,7 +8,7 @@ continuous_search:
   target_minimum_iou: 0.05
 
   # 已按本次实艇测量填写。
-  forward_command: 0.13
+  forward_command: 0.23
   shift_command: 0.20
   shift_duration_s: 4.5
   small_yaw_left_command: 0.15
@@ -17,8 +17,8 @@ continuous_search:
   small_yaw_right_duration_s: 4.31
   turn_command: 0.20
   turn_duration_s: 11.5
-  descent_command: 0.315
-  ascent_command: 0.315
+  descent_command: 0.415
+  ascent_command: 0.415
 
   # 以下为原 search_test.yaml 的触底基线，尚未完成本次实艇确认。
   probe_timeout_s: 45.0
