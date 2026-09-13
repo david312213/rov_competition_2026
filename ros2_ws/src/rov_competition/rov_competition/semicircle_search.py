@@ -116,8 +116,8 @@ class SemicircleSearchMission:
     """半圆核心区的定时蛇形搜寻。
 
     没有位置估计、罗盘闭环或自动边界判断。每条搜寻带到时后自动横移、
-    定时大角度翻转；``N`` 只保留为提前换带的备用键。稳定发现目标后仅
-    停车，抓取由另一策略接管。
+    定时大角度翻转；``N`` 只保留为提前换带的备用键。是否因稳定发现目标
+    停车由 ``stop_on_stable_target`` 配置决定。
     """
 
     def __init__(self, config: SearchConfig) -> None:
@@ -225,7 +225,7 @@ class SemicircleSearchMission:
             return self._out(MotionCommand.neutral(), "仅可在持续搜寻时换带")
         self.state = SearchState.LANE_SHIFTING
         self.state_started_at = now
-        return self._out(self._lane_shift_motion(), "人工换带：横移中")
+        return self._out(self._lane_shift_motion(), "换带：横移中")
 
     def _probe_bottom(self, observation: MissionObservation, now: float) -> SearchDecision:
         assert self.probe_start_depth_m is not None
@@ -282,14 +282,14 @@ class SemicircleSearchMission:
 
     def _continue_lane_shift(self, now: float) -> SearchDecision:
         if now - self.state_started_at < self.config.shift_duration_s:
-            return self._out(self._lane_shift_motion(), "人工换带：横移中")
+            return self._out(self._lane_shift_motion(), "换带：横移中")
         self.state = SearchState.LANE_TURNING
         self.state_started_at = now
-        return self._out(self._lane_turn_motion(), "人工换带：大角度翻转中")
+        return self._out(self._lane_turn_motion(), "换带：大角度翻转中")
 
     def _continue_lane_turn(self, now: float) -> SearchDecision:
         if now - self.state_started_at < self.config.turn_duration_s:
-            return self._out(self._lane_turn_motion(), "人工换带：大角度翻转中")
+            return self._out(self._lane_turn_motion(), "换带：大角度翻转中")
         self.lane_index += 1
         self.forward_direction = not self.forward_direction
         self.state = SearchState.SEARCHING

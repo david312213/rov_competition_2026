@@ -1,7 +1,7 @@
 """连续自动蛇形搜寻的 ROS 运行时。
 
-只负责触底、离底定高、定时蛇形搜索和稳定发现目标后的停车；不调用抓取、
-机械爪或原有群体盲抓流程。
+只负责触底、离底定高和定时蛇形搜索；不调用抓取、机械爪或原有群体盲抓
+流程。是否因稳定发现目标停车由配置决定。
 """
 
 from __future__ import annotations
@@ -98,9 +98,13 @@ def _draw(
 
 
 def _print_live_status(
-    mission: SemicircleSearchMission, observation: MissionObservation, node: SearchApproachNode, message: str,
+    mission: SemicircleSearchMission,
+    observation: MissionObservation,
+    node: SearchApproachNode,
+    motion: MotionCommand,
+    message: str,
 ) -> None:
-    """每秒输出一行可复制的现场状态，不改变任何控制命令。"""
+    """每秒输出一行现场状态，包含本循环已发布的四轴命令。"""
 
     status = node.status
     mode = "UNKNOWN" if status is None else str(status.flight_mode)
@@ -111,6 +115,8 @@ def _print_live_status(
         f"state={mission.state.value} lane={mission.lane_index + 1} "
         f"direction={'forward' if mission.forward_direction else 'reverse'} "
         f"depth={observation.depth_m:.2f}m detections={len(observation.detections)} "
+        f"cmd=(forward={motion.forward:+.3f}, lateral={motion.lateral:+.3f}, "
+        f"vertical={motion.vertical:+.3f}, yaw={motion.yaw:+.3f}) "
         f"mode={mode} armed={armed} runtime_enabled={runtime_enabled} | {message}",
         flush=True,
     )
@@ -206,7 +212,12 @@ def main(argv: list[str] | None = None) -> int:
         pygame.display.set_caption("ROV Continuous Search")
         font = pygame.font.Font(None, 27)
         print("连续搜寻不会调用机械爪、群体盲抓或抓取策略。")
-        print(f"T 后：触底 → 上浮 {search.clearance_m:.2f}m → 自动定时蛇形；稳定发现 {search.target_label} 后仅停车。")
+        target_behavior = (
+            f"稳定发现 {search.target_label} 后停车"
+            if search.stop_on_stable_target
+            else f"检测 {search.target_label} 不会中止搜寻"
+        )
+        print(f"T 后：触底 → 上浮 {search.clearance_m:.2f}m → 自动定时蛇形；{target_behavior}。")
         print("请确认 ROV 已浸没、危险区无人、QGC 为 ALT_HOLD、QGC 遥测与视频正常，且可立即人工上锁。")
         print("无需输入确认词；进入窗口后按 T 才会开始触底定高。")
 
@@ -245,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
             message = decision.message
             node.publish(decision.motion)
             if now >= next_status_report_at:
-                _print_live_status(mission, observation, node, message)
+                _print_live_status(mission, observation, node, decision.motion, message)
                 next_status_report_at = now + 1.0
             _draw(pygame, screen, font, mission, message, lane_seconds, surface_minutes)
             clock.tick(20)
