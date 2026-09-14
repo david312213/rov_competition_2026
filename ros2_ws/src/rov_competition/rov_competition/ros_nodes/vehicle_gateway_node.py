@@ -9,20 +9,22 @@ from __future__ import annotations
 
 import math
 import time
+import uuid
 from dataclasses import replace
 from pathlib import Path
 
 import rclpy
 from rclpy.node import Node
 from rov_interfaces.msg import ControlStatus, NormalizedMotionCommand, RobotTelemetry
+from rov_interfaces.msg import GripperExecutionStatus
+from rov_competition.gripper_execution import GripperExecution
 from rov_interfaces.srv import SetArmed, SetGripper
 from std_msgs.msg import Bool, Float32, Int16, String
 from std_srvs.srv import SetBool, Trigger
 
 from rov_competition.config import RobotConfig, load_robot_config
-from rov_competition.control_safety import validate_command_envelope
 from rov_competition.domain import ControlState, GripperAction, MotionCommand
-from rov_competition.safety import is_fresh_telemetry
+from rov_competition.safety import is_fresh_telemetry, validate_command_envelope
 from rov_competition.vehicle import MavlinkVehicle, VehicleError
 
 ARM_CONFIRMATION = "ARM ROV"
@@ -83,6 +85,8 @@ class VehicleGatewayNode(Node):
         self._last_command_source = ""
         self._last_warning: tuple[str, float] | None = None
         self._destroying = False
+        self._gripper_execution = GripperExecution()
+        self._seen_gripper_requests = set()
 
         self._vehicle = MavlinkVehicle(self._config)
         self._vehicle.connect()
@@ -115,6 +119,9 @@ class VehicleGatewayNode(Node):
         self._gripper_service = self.create_service(
             SetGripper, "/rov/control/set_gripper", self._handle_gripper
         )
+        self._gripper_execution_publisher = self.create_publisher(
+            GripperExecutionStatus, "/rov/control/gripper_execution", 10)
+        self._gripper_execution_timer = self.create_timer(0.05, self._publish_gripper_execution)
         self._enable_service = self.create_service(
             SetBool, "/rov/control/set_enabled", self._handle_set_enabled
         )
@@ -139,7 +146,8 @@ class VehicleGatewayNode(Node):
         arm_state = "ENABLED" if effective_arming else "DISABLED"
         self.get_logger().info(
             f"MAVLink 已连接；真实输出 {output_state}；ROS 解锁 {arm_state}；"
-            f"协议 {self._config.control_protocol.value}"
+            f"协议 {self._config.control_protocol.value}；"
+            f"机械爪档案 {self._config.gripper.profile}"
         )
 
     def _boolean_parameter(self, name: str) -> bool:
@@ -284,21 +292,65 @@ class VehicleGatewayNode(Node):
             action = GripperAction.OPEN
         elif int(request.action) == int(SetGripper.Request.CLOSE):
             action = GripperAction.CLOSE
+        elif int(request.action) == int(SetGripper.Request.RAISE):
+            action = GripperAction.RAISE
+        elif int(request.action) == int(SetGripper.Request.RESET):
+            action = GripperAction.RESET
         else:
             return self._reject_gripper(
                 f"无效机械爪动作枚举: {int(request.action)}", response
             )
+        request_id = request.request_id or uuid.uuid4().hex
+        response.request_id = request_id
+        if self._gripper_execution.active or request_id in self._seen_gripper_requests:
+            return self._reject_gripper("机械动作重叠或重复请求", response)
         try:
-            self._vehicle.set_gripper(action)
-        except VehicleError as exc:
+            steps = self._config.gripper.steps_for(action.value)
+            # Old clients retain their original mechanical waits. New dual_dof
+            # clients require the gateway's calibrated completion status.
+            wait_s = self._config.gripper.wait_for(action.value) if self._config.gripper.profile == "dual_dof" else 0.0
+            self._gripper_execution.begin(request_id, request.source, action.value,
+                time.monotonic(), len(steps) * (self._config.gripper.step_interval_s +
+                    (2.0 if self._config.gripper.profile == "dual_dof" else 0.0)), wait_s)
+            self._seen_gripper_requests.add(request_id)
+            step_count, duration_s = self._vehicle.set_gripper(action)
+        except (VehicleError, ValueError) as exc:
+            self._gripper_execution.fail(str(exc))
             self._enter_emergency_stop(f"机械爪执行失败: {exc}")
             response.success = False
             response.message = self._reason
             return response
-        self._reason = f"机械爪 {action.value} 命令已接受（无物理抓牢反馈）"
+        self._reason = (
+            f"机械爪档案 {self._config.gripper.profile} 的 {action.value} 序列已开始："
+            f"{step_count} 个节拍，"
+            f"预计 {duration_s:.2f}s 发完（无位置/抓牢反馈）"
+        )
         response.success = True
         response.message = self._reason
+        self._emit_gripper_execution()
         return response
+
+    def _publish_gripper_execution(self) -> None:
+        execution = self._gripper_execution
+        if not execution.request_id:
+            return
+        if execution.active and (self._estop_latched or not self._runtime_enabled
+                or not self._armed_by_ros):
+            execution.fail("控制已停止，取消后续机械动作", cancelled=True)
+            self._vehicle.cancel_gripper()
+        execution.poll(time.monotonic(), self._vehicle.gripper_active)
+        if execution.state == "failed" and not self._estop_latched:
+            self._vehicle.cancel_gripper()
+            self._enter_emergency_stop(execution.message)
+        self._emit_gripper_execution()
+
+    def _emit_gripper_execution(self) -> None:
+        execution = self._gripper_execution
+        message = GripperExecutionStatus()
+        message.stamp = self.get_clock().now().to_msg()
+        for field in ("request_id", "source", "action", "state", "message"):
+            setattr(message, field, getattr(execution, field))
+        self._gripper_execution_publisher.publish(message)
 
     def _reject_gripper(
         self, reason: str, response: SetGripper.Response
@@ -483,6 +535,8 @@ class VehicleGatewayNode(Node):
         """先锁住软件状态，再尝试回中、上锁和释放控制。"""
 
         self._estop_latched = True
+        self._gripper_execution.fail(reason, cancelled=True)
+        self._vehicle.cancel_gripper()
         self._runtime_enabled = False
         self._armed_by_ros = False
         self._state = ControlState.ESTOPPED
@@ -528,6 +582,13 @@ class VehicleGatewayNode(Node):
         if snapshot.armed is True and mode not in self._config.allowed_flight_modes:
             self._enter_emergency_stop(f"飞控模式变为 {mode or 'UNKNOWN'}")
             return
+        if self._vehicle.gripper_active:
+            try:
+                self._vehicle.update_gripper()
+            except VehicleError as exc:
+                self._gripper_execution.fail(str(exc))
+                self._enter_emergency_stop(f"机械爪渐变中止: {exc}")
+                return
         if self._state == ControlState.ACTIVE and self._vehicle.command_timed_out():
             self._enter_emergency_stop("运动命令超时")
             return

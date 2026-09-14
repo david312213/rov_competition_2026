@@ -1,11 +1,43 @@
-"""自主任务启动和运行期间的纯软件安全检查。"""
+"""控制网关和自主任务共用的纯软件安全检查。"""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
 
 from .config import MissionConfig
+
+
+class PerceptionFreshness(str, Enum):
+    """感知年龄对应的控制动作。"""
+
+    FRESH = "fresh"
+    HOLD = "hold"
+    ABORT = "abort"
+
+
+def classify_perception_age(
+    age_s: float,
+    *,
+    hold_timeout_s: float,
+    abort_timeout_s: float,
+) -> PerceptionFreshness:
+    """把感知年龄分成继续、回中等待和硬中止三个区间。"""
+
+    if (
+        not math.isfinite(hold_timeout_s)
+        or not math.isfinite(abort_timeout_s)
+        or hold_timeout_s <= 0.0
+        or abort_timeout_s <= hold_timeout_s
+    ):
+        raise ValueError("感知软暂停和硬中止阈值不合法")
+    if not math.isfinite(age_s) or age_s < 0.0 or age_s > abort_timeout_s:
+        return PerceptionFreshness.ABORT
+    if age_s > hold_timeout_s:
+        return PerceptionFreshness.HOLD
+    return PerceptionFreshness.FRESH
 
 
 @dataclass(frozen=True)
@@ -46,6 +78,41 @@ def is_fresh_telemetry(timestamp: float | None, now: float, timeout_s: float) ->
     """判断一组真实遥测是否仍在允许的数据年龄内。"""
 
     return timestamp is not None and 0.0 <= now - timestamp <= timeout_s
+
+
+def validate_command_envelope(
+    *,
+    source: str,
+    expected_source: str,
+    values: Iterable[float],
+    stamp_s: float,
+    now_s: float,
+    maximum_age_s: float,
+    future_tolerance_s: float = 0.10,
+) -> str | None:
+    """验证运动命令的来源、数值范围和端到端时间戳。
+
+    返回 ``None`` 表示命令可以继续执行；否则返回可直接写入状态话题
+    和日志的拒绝原因。这里拒绝异常命令，不对数据做猜测性修复。
+    """
+
+    if source.strip() != expected_source:
+        return f"非法命令来源 {source!r}；只允许 {expected_source!r}"
+    numeric_values = tuple(float(value) for value in values)
+    if not all(math.isfinite(value) for value in numeric_values):
+        return "运动命令包含 NaN/Inf"
+    if any(abs(value) > 1.0 for value in numeric_values):
+        return "归一化运动命令必须位于 [-1, 1]"
+    if not math.isfinite(stamp_s) or stamp_s <= 0.0:
+        return "运动命令缺少有效时间戳"
+    if not math.isfinite(now_s):
+        return "控制网关当前时间无效"
+    age_s = now_s - stamp_s
+    if age_s < -future_tolerance_s:
+        return f"运动命令时间戳超前 {-age_s:.3f}s"
+    if age_s > maximum_age_s:
+        return f"运动命令已过期 {age_s:.3f}s，上限 {maximum_age_s:.3f}s"
+    return None
 
 
 def autonomy_safety_error(

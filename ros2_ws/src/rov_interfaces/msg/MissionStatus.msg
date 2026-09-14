@@ -25,3 +25,23 @@ float32 estimated_advance_distance_m
 uint16 search_cycle
 
 bool gripper_command_accepted
+
+# 群体收集测试的附加状态。旧任务发布者保持默认零值。
+bool has_cluster
+uint16 visible_scallop_count
+uint16 locked_cluster_count
+float32 cluster_center_x_ratio
+float32 cluster_center_y_ratio
+float32 cluster_union_area_ratio
+uint8 grasp_attempt_index
+uint16 completed_cluster_count
+string descent_trigger_mode
+
+# Selected single target, normalized to capture dimensions. Not arrival feedback.
+bool has_selected_target
+float32 selected_confidence
+float32 selected_left
+float32 selected_top
+float32 selected_right
+float32 selected_bottom
+bool descent_vertical_only

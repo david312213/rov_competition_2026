@@ -129,6 +129,184 @@ class RcOverrideConfig:
 
 
 @dataclass(frozen=True)
+class GripperSweepConfig:
+    """一次开爪或闭爪的 PWM 渐变。
+
+    旧大连工程不是只发送一个终点值，而是按固定步长连续发送一组
+    ``MAV_CMD_DO_SET_SERVO``。把起点、终点和步长写进配置，既能复现
+    实艇旧逻辑，也能在换舵机后只改 YAML，不再复制一份脚本。
+    """
+
+    start_pwm: int
+    end_pwm: int
+    step_pwm: int
+
+    def __post_init__(self) -> None:
+        """拒绝越界、零步长和朝错误方向变化的序列。"""
+
+        # RST 原型的右侧执行器闭爪值是 500us。这里只允许配置文件忠实描述
+        # 500..2500 的历史候选范围；是否真的允许超出常见 800..2200，仍由
+        # GripperConfig.allow_extended_pwm 和实艇安全门共同决定。
+        if not 500 <= self.start_pwm <= 2500 or not 500 <= self.end_pwm <= 2500:
+            raise ConfigurationError("机械爪 PWM 必须在 500..2500")
+        if self.step_pwm == 0 or abs(self.step_pwm) > 200:
+            raise ConfigurationError("机械爪 PWM 步长必须非零且绝对值不超过 200")
+        delta = self.end_pwm - self.start_pwm
+        if delta != 0 and (delta > 0) != (self.step_pwm > 0):
+            raise ConfigurationError("机械爪 PWM 步长方向必须指向终点")
+
+    def values(self) -> tuple[int, ...]:
+        """返回包含首尾值的有限 PWM 序列。"""
+
+        if self.start_pwm == self.end_pwm:
+            return (self.start_pwm,)
+        values = [self.start_pwm]
+        current = self.start_pwm
+        if self.step_pwm > 0:
+            while current < self.end_pwm:
+                current = min(self.end_pwm, current + self.step_pwm)
+                values.append(current)
+        else:
+            while current > self.end_pwm:
+                current = max(self.end_pwm, current + self.step_pwm)
+                values.append(current)
+        return tuple(values)
+
+
+@dataclass(frozen=True)
+class GripperOutputConfig:
+    """一个机械爪执行器对应的绝对 SERVO 输出和开闭曲线。"""
+
+    output_channel: int
+    open_sweep: GripperSweepConfig
+    close_sweep: GripperSweepConfig
+
+    def __post_init__(self) -> None:
+        """输出号必须是 MAVLink SERVO 实例号，不接受 AUX 相对编号。"""
+
+        if not 1 <= self.output_channel <= 32:
+            raise ConfigurationError("机械爪绝对 SERVO 输出号必须在 1..32")
+
+    def sweep_for(self, action: str) -> GripperSweepConfig:
+        """按领域动作名返回该执行器的曲线。"""
+
+        if action == "open":
+            return self.open_sweep
+        if action == "close":
+            return self.close_sweep
+        raise ConfigurationError(f"未知机械爪动作: {action}")
+
+
+@dataclass(frozen=True)
+class GripperConfig:
+    """当前选中的机械爪档案；可包含一个或多个同步执行器。"""
+
+    profile: str
+    step_interval_s: float
+    calibrated: bool
+    allow_extended_pwm: bool
+    outputs: tuple[GripperOutputConfig, ...]
+    # Separate actuator: open_sweep means raise; close_sweep means reset.
+    lift: GripperOutputConfig | None = None
+    action_wait_s: Mapping[str, float] | None = None
+    pwm_min: int = 800
+    pwm_max: int = 2200
+
+    def __post_init__(self) -> None:
+        """在连接飞控前校验输出号和节拍。"""
+
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", self.profile):
+            raise ConfigurationError("机械爪档案名必须使用小写字母、数字或下划线")
+        if not self.outputs:
+            raise ConfigurationError("机械爪档案至少需要一个输出")
+        output_channels = list(self.output_channels)
+        if len(set(output_channels)) != len(output_channels):
+            raise ConfigurationError("机械爪档案不能重复使用同一个 SERVO 输出")
+        if self.profile == "dual_dof":
+            if len(self.outputs) != 1 or self.lift is None:
+                raise ConfigurationError("dual_dof 必须分别配置一路开闭爪和一路抬爪，禁止沿用双路联动开闭")
+            if any(channel <= 8 for channel in output_channels):
+                raise ConfigurationError("dual_dof 不允许使用八路推进器输出 S1..S8")
+            if self.lift.open_sweep.end_pwm == self.lift.close_sweep.end_pwm:
+                raise ConfigurationError("抬爪最高位和复位 PWM 必须不同")
+            if not 500 <= self.pwm_min < self.pwm_max <= 2500:
+                raise ConfigurationError("dual_dof 必须配置已确认的 PWM 范围")
+            if any(not self.pwm_min <= value <= self.pwm_max for value in self.all_pwm_values()):
+                raise ConfigurationError("舵机曲线超出配置的允许 PWM 范围")
+            if not isinstance(self.action_wait_s, Mapping) or set(self.action_wait_s) != {"open", "close", "raise", "reset"}:
+                raise ConfigurationError("dual_dof 必须配置四个动作的实测等待时间")
+            if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 < v <= 30 for v in self.action_wait_s.values()):
+                raise ConfigurationError("舵机等待时间必须在 (0,30] 秒")
+        elif self.lift is not None:
+            raise ConfigurationError("独立抬爪输出只允许用于 dual_dof 档案")
+        if not math.isfinite(self.step_interval_s) or not (
+            0.02 <= self.step_interval_s <= 1.0
+        ):
+            raise ConfigurationError("机械爪每步间隔必须在 0.02..1.0 秒")
+
+    @property
+    def output_channels(self) -> tuple[int, ...]:
+        """返回档案使用的全部绝对 SERVO 输出号。"""
+
+        return tuple(output.output_channel for output in self.all_outputs)
+
+    @property
+    def all_outputs(self) -> tuple[GripperOutputConfig, ...]:
+        return self.outputs + ((self.lift,) if self.lift is not None else ())
+
+    def wait_for(self, action: str) -> float:
+        return float(self.action_wait_s[action]) if self.action_wait_s is not None else 1.5
+
+    @property
+    def uses_extended_pwm(self) -> bool:
+        """档案中出现常见 800..2200 范围外的历史 PWM 时返回真。"""
+
+        return any(
+            not 800 <= pwm <= 2200
+            for output in self.all_outputs
+            for sweep in (output.open_sweep, output.close_sweep)
+            for pwm in sweep.values()
+        )
+
+    def steps_for(self, action: str) -> tuple[tuple[tuple[int, int], ...], ...]:
+        """把一个或多个输出的曲线合成为按节拍执行的命令帧。
+
+        同一帧中的多路命令会背靠背发送；较短曲线完成后不会反复重发终点。
+        大连档案每帧只有 AUX4，RST 档案第一帧同时包含 AUX3 和 AUX2。
+        """
+
+        if action in {"raise", "reset"}:
+            if self.lift is None:
+                raise ConfigurationError("当前档案没有独立抬爪输出")
+            mapped = "open" if action == "raise" else "close"
+            return tuple(((self.lift.output_channel, value),) for value in self.lift.sweep_for(mapped).values())
+        sweeps = tuple(
+            (output.output_channel, output.sweep_for(action).values())
+            for output in self.outputs
+        )
+        frame_count = max(len(values) for _, values in sweeps)
+        frames: list[tuple[tuple[int, int], ...]] = []
+        for index in range(frame_count):
+            frame = tuple(
+                (output_channel, values[index])
+                for output_channel, values in sweeps
+                if index < len(values)
+            )
+            frames.append(frame)
+        return tuple(frames)
+
+    def all_pwm_values(self) -> tuple[int, ...]:
+        """返回当前档案全部开闭候选值，供预检和报告使用。"""
+
+        return tuple(
+            pwm
+            for output in self.all_outputs
+            for sweep in (output.open_sweep, output.close_sweep)
+            for pwm in sweep.values()
+        )
+
+
+@dataclass(frozen=True)
 class RobotConfig:
     """飞控连接、运动协议、实艇预检和执行安全门配置。"""
 
@@ -157,18 +335,19 @@ class RobotConfig:
     arm_ack_timeout_s: float
     axis_directions: Mapping[str, int]
     rc_override: RcOverrideConfig
-    gripper_output_channel: int
-    gripper_open_pwm: int
-    gripper_close_pwm: int
+    gripper: GripperConfig
     depth_message: str
     depth_field: str
     depth_multiplier: float
     depth_offset_m: float
+    upward_neutral_bypass_slew: bool = False
 
     def __post_init__(self) -> None:
         """在任何硬件连接发生前检查完整配置和安全约束。"""
 
         required_axes = {"forward", "lateral", "vertical", "yaw"}
+        if not isinstance(self.upward_neutral_bypass_slew, bool):
+            raise ConfigurationError("control.upward_neutral_bypass_slew 必须是布尔值")
         if set(self.axis_directions) != required_axes:
             raise ConfigurationError(
                 f"control.directions 必须且只能包含 {sorted(required_axes)}"
@@ -218,15 +397,23 @@ class RobotConfig:
             raise ConfigurationError("allow_ros_arming=true 时必须同时允许真实执行")
         if self.allow_gripper_actuation and not self.allow_live_actuation:
             raise ConfigurationError("允许机械爪动作时必须同时允许真实执行")
+        if self.allow_gripper_actuation and not self.gripper.calibrated:
+            raise ConfigurationError(
+                "允许机械爪动作前必须完成实机标定并设置 gripper.calibrated: true"
+            )
+        if (
+            self.allow_gripper_actuation
+            and self.gripper.uses_extended_pwm
+            and not self.gripper.allow_extended_pwm
+        ):
+            raise ConfigurationError(
+                "当前机械爪档案包含 800..2200 之外的历史 PWM；"
+                "实测确认后还必须显式设置 allow_extended_pwm: true"
+            )
         if self.expected_gcs_failsafe_action not in (1, 2, 3, 4):
             raise ConfigurationError("expected_gcs_failsafe_action 必须是 1..4")
-        if not 1 <= self.gripper_output_channel <= 16:
-            raise ConfigurationError("机械爪绝对输出号必须在 1..16")
-        for value in (self.gripper_open_pwm, self.gripper_close_pwm):
-            if not 800 <= value <= 2200:
-                raise ConfigurationError("机械爪 PWM 必须在 800..2200")
-        if self.gripper_open_pwm == self.gripper_close_pwm:
-            raise ConfigurationError("机械爪开合 PWM 不能相同")
+        if self.gripper.steps_for("open") == self.gripper.steps_for("close"):
+            raise ConfigurationError("机械爪开合 PWM 序列不能完全相同")
         if not re.fullmatch(r"[A-Z][A-Z0-9_]*", self.depth_message):
             raise ConfigurationError("depth.message 必须是 MAVLink 消息名")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.depth_field):
@@ -241,6 +428,88 @@ class RobotConfig:
         """返回当前启动档案唯一允许的 ROS 命令来源。"""
 
         return self.control_profile.value
+
+
+@dataclass(frozen=True)
+class DatasetCollectionConfig:
+    """水池数据采集的键盘、回收与链路安全参数。
+
+    这些参数不包含电机通道或 PWM。键盘工具仍只发布四轴
+    归一化运动意图，八推进器混控由 ArduSub 完成。
+    """
+
+    initial_command: float
+    minimum_command: float
+    maximum_command: float
+    command_step: float
+    publish_rate_hz: float
+
+    recovery_gain: float
+    recovery_max_command: float
+    recovery_tolerance_m: float
+    recovery_settle_s: float
+    recovery_timeout_s: float
+
+    maximum_telemetry_age_s: float
+    maximum_status_age_s: float
+    maximum_attitude_age_s: float
+    allowed_flight_mode: str
+
+    def __post_init__(self) -> None:
+        """在连接实艇前拒绝不合法或会绕过限幅的参数。"""
+
+        commands = (
+            self.minimum_command,
+            self.initial_command,
+            self.maximum_command,
+        )
+        if any(not math.isfinite(value) or not 0.0 < value <= 1.0 for value in commands):
+            raise ConfigurationError("键盘指令幅值必须在 (0, 1] 内")
+        if not self.minimum_command <= self.initial_command <= self.maximum_command:
+            raise ConfigurationError(
+                "键盘初始指令必须位于最小与最大指令之间"
+            )
+        if not math.isfinite(self.command_step) or self.command_step <= 0.0:
+            raise ConfigurationError("键盘指令调节步长必须大于 0")
+        if not 5.0 <= self.publish_rate_hz <= 50.0:
+            raise ConfigurationError("键盘控制发布频率必须在 5..50 Hz")
+
+        recovery_values = (
+            self.recovery_gain,
+            self.recovery_max_command,
+            self.recovery_tolerance_m,
+            self.recovery_settle_s,
+            self.recovery_timeout_s,
+            self.maximum_telemetry_age_s,
+            self.maximum_status_age_s,
+            self.maximum_attitude_age_s,
+        )
+        if any(not math.isfinite(value) or value <= 0.0 for value in recovery_values):
+            raise ConfigurationError("回收控制和数据新鲜度参数必须大于 0")
+        if self.recovery_max_command > self.maximum_command:
+            raise ConfigurationError("回收上升指令不能超过键盘最大指令")
+        if self.allowed_flight_mode != "ALT_HOLD":
+            raise ConfigurationError("数据采集工具只允许 ALT_HOLD 模式")
+
+    def readiness_errors(self, robot: RobotConfig) -> tuple[str, ...]:
+        """列出一键采集禁止解锁的全部配置原因。"""
+
+        errors: list[str] = []
+        if robot.control_profile != ControlProfile.COMMISSIONING:
+            errors.append("robot.yaml 的 control.profile 必须是 commissioning")
+        if self.allowed_flight_mode not in robot.allowed_flight_modes:
+            errors.append("robot.yaml 的 allowed_flight_modes 必须包含 ALT_HOLD")
+        if not robot.allow_live_actuation:
+            errors.append("robot.yaml 尚未允许真实输出")
+        if not robot.allow_ros_arming:
+            errors.append("robot.yaml 尚未允许 ROS 解锁")
+        if robot.allow_gripper_actuation:
+            errors.append("数据采集时必须关闭机械爪权限")
+        if self.maximum_command > robot.command_limit:
+            errors.append(
+                "dataset 最大指令超过 robot.yaml 的 control.command_limit"
+            )
+        return tuple(errors)
 
 
 @dataclass(frozen=True)
@@ -326,6 +595,7 @@ class MissionConfig:
     maximum_operation_depth_m: float
     maximum_heartbeat_age_s: float
     maximum_message_age_s: float
+    perception_hold_timeout_s: float
     maximum_perception_age_s: float
     maximum_control_status_age_s: float
     allowed_flight_modes: tuple[str, ...]
@@ -368,6 +638,130 @@ class AutonomyConfig:
 
     detector: DetectorConfig
     mission: MissionConfig
+
+
+def _load_gripper_config(data: Mapping[str, Any]) -> GripperConfig:
+    """读取可切换的机械爪档案，并兼容旧本地 YAML。
+
+    新格式只加载 ``active_profile`` 指定的一份档案，网关运行中不能切换。
+    旧格式仍可读取，以免队员的本地 ``robot.yaml`` 阻止遥测启动，但会被
+    强制标记为未标定，不能绕过机械爪安全门。
+    """
+
+    def sweep(section: Mapping[str, Any]) -> GripperSweepConfig:
+        """读取一条开爪或闭爪曲线。"""
+
+        return GripperSweepConfig(
+            start_pwm=int(section["start_pwm"]),
+            end_pwm=int(section["end_pwm"]),
+            step_pwm=int(section["step_pwm"]),
+        )
+
+    def output(section: Mapping[str, Any], name: str) -> GripperOutputConfig:
+        """读取一个绝对 SERVO 输出及其开闭曲线。"""
+
+        open_data = _mapping(section.get("open", {}), f"{name}.open")
+        close_data = _mapping(section.get("close", {}), f"{name}.close")
+        return GripperOutputConfig(
+            output_channel=int(section["output_channel"]),
+            open_sweep=sweep(open_data),
+            close_sweep=sweep(close_data),
+        )
+
+    def profile(
+        profile_name: str, section: Mapping[str, Any], name: str
+    ) -> GripperConfig:
+        """读取一个单路或多路机械爪档案。"""
+
+        raw_outputs = section.get("outputs")
+        if not isinstance(raw_outputs, list) or not raw_outputs:
+            raise ConfigurationError(f"{name}.outputs 必须是非空列表")
+        outputs = tuple(
+            output(
+                _mapping(item, f"{name}.outputs[{index}]"),
+                f"{name}.outputs[{index}]",
+            )
+            for index, item in enumerate(raw_outputs)
+        )
+        lift = None
+        if section.get("lift") is not None:
+            raw_lift = _mapping(section["lift"], f"{name}.lift")
+            try:
+                lift = GripperOutputConfig(int(raw_lift["output_channel"]),
+                    sweep(_mapping(raw_lift["raise"], "lift.raise")),
+                    sweep(_mapping(raw_lift["reset"], "lift.reset")))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ConfigurationError("抬爪通道和位置待标定，不能运行") from exc
+        return GripperConfig(
+            profile=profile_name,
+            step_interval_s=_finite(
+                section.get("step_interval_s", 0.125), f"{name}.step_interval_s"
+            ),
+            calibrated=_boolean(
+                section.get("calibrated", False), f"{name}.calibrated"
+            ),
+            allow_extended_pwm=_boolean(
+                section.get("allow_extended_pwm", False),
+                f"{name}.allow_extended_pwm",
+            ),
+            outputs=outputs,
+            lift=lift,
+            action_wait_s=section.get("action_wait_s"),
+            pwm_min=int(section.get("pwm_min", 800)),
+            pwm_max=int(section.get("pwm_max", 2200)),
+        )
+
+    if "profiles" in data:
+        active_profile = str(data.get("active_profile", "")).strip()
+        if not active_profile:
+            raise ConfigurationError("gripper.active_profile 不能为空")
+        profiles = _mapping(data["profiles"], "gripper.profiles")
+        if active_profile not in profiles:
+            raise ConfigurationError(
+                f"gripper.active_profile={active_profile!r} 不存在于 profiles"
+            )
+        section = _mapping(
+            profiles[active_profile], f"gripper.profiles.{active_profile}"
+        )
+        return profile(
+            active_profile, section, f"gripper.profiles.{active_profile}"
+        )
+
+    # 兼容已经部署过的单输出渐变格式。
+    output_channel = int(data["output_channel"])
+    if "open" in data or "close" in data:
+        single_output = output(data, "gripper")
+        return GripperConfig(
+            profile=str(data.get("profile", "dalian")).strip(),
+            step_interval_s=_finite(
+                data.get("step_interval_s", 0.125), "gripper.step_interval_s"
+            ),
+            calibrated=_boolean(
+                data.get("calibrated", False), "gripper.calibrated"
+            ),
+            allow_extended_pwm=_boolean(
+                data.get("allow_extended_pwm", False),
+                "gripper.allow_extended_pwm",
+            ),
+            outputs=(single_output,),
+        )
+
+    # 更老的单次 PWM 格式只允许读取，不承认已经完成标定。
+    open_pwm = int(data["open_pwm"])
+    close_pwm = int(data["close_pwm"])
+    return GripperConfig(
+        profile="legacy",
+        step_interval_s=0.125,
+        calibrated=False,
+        allow_extended_pwm=False,
+        outputs=(
+            GripperOutputConfig(
+                output_channel=output_channel,
+                open_sweep=GripperSweepConfig(open_pwm, open_pwm, 25),
+                close_sweep=GripperSweepConfig(close_pwm, close_pwm, -25),
+            ),
+        ),
+    )
 
 
 def load_robot_config(path: str | Path) -> RobotConfig:
@@ -425,10 +819,10 @@ def load_robot_config(path: str | Path) -> RobotConfig:
             connection_uri=str(mavlink["connection_uri"]),
             heartbeat_timeout_s=float(mavlink.get("heartbeat_timeout_s", 10.0)),
             heartbeat_stale_timeout_s=float(
-                mavlink.get("heartbeat_stale_timeout_s", 1.5)
+                mavlink.get("heartbeat_stale_timeout_s", 2.5)
             ),
             telemetry_stale_timeout_s=float(
-                mavlink.get("telemetry_stale_timeout_s", 1.0)
+                mavlink.get("telemetry_stale_timeout_s", 2.0)
             ),
             preflight_timeout_s=float(mavlink.get("preflight_timeout_s", 20.0)),
             baud=int(mavlink.get("baud", 115200)),
@@ -439,7 +833,7 @@ def load_robot_config(path: str | Path) -> RobotConfig:
             allowed_flight_modes=allowed_modes,
             command_limit=_finite(control.get("command_limit", 0.10), "command_limit"),
             maximum_command_age_s=_finite(
-                control.get("maximum_command_age_s", 0.25),
+                control.get("maximum_command_age_s", 0.50),
                 "maximum_command_age_s",
             ),
             slew_rate_per_s=_finite(
@@ -476,16 +870,82 @@ def load_robot_config(path: str | Path) -> RobotConfig:
                 name: int(value) for name, value in directions_data.items()
             },
             rc_override=rc_override,
-            gripper_output_channel=int(gripper["output_channel"]),
-            gripper_open_pwm=int(gripper["open_pwm"]),
-            gripper_close_pwm=int(gripper["close_pwm"]),
+            gripper=_load_gripper_config(gripper),
             depth_message=str(depth.get("message", "AHRS2")).upper(),
             depth_field=str(depth.get("field", "altitude")),
             depth_multiplier=_finite(depth.get("multiplier", -1.0), "depth.multiplier"),
             depth_offset_m=_finite(depth.get("offset_m", 0.0), "depth.offset_m"),
+            upward_neutral_bypass_slew=_boolean(
+                control.get("upward_neutral_bypass_slew", False),
+                "control.upward_neutral_bypass_slew",
+            ),
         )
     except KeyError as exc:
         raise ConfigurationError(f"机器人配置缺少字段: {exc.args[0]}") from exc
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(f"机器人参数无效或仍待标定: {exc}") from exc
+
+
+def load_dataset_config(path: str | Path) -> DatasetCollectionConfig:
+    """读取键盘遥控和原始视频采集参数，不连接实艇。"""
+
+    data = _read_yaml(path)
+    manual = _mapping(data.get("manual_control", {}), "manual_control")
+    recovery = _mapping(data.get("recovery", {}), "recovery")
+    safety = _mapping(data.get("safety", {}), "safety")
+    # 老版本模板把该值设得较小。图形线程短暂停顿后，ROS 的
+    # telemetry/status 回调可能同时排队，过小阈值会在处理完第一个回调后
+    # 误判第二个仍然过期。采集工具固定保证至少 3s 的桌面调度余量；
+    # 网关自己的命令超时、飞控心跳和急停不由这个值控制。
+    status_age_limit = max(
+        3.0,
+        _finite(
+            safety.get("maximum_status_age_s", 3.0),
+            "safety.maximum_status_age_s",
+        ),
+    )
+    return DatasetCollectionConfig(
+        initial_command=_finite(
+            manual.get("initial_command", 0.05), "manual_control.initial_command"
+        ),
+        minimum_command=_finite(
+            manual.get("minimum_command", 0.01), "manual_control.minimum_command"
+        ),
+        maximum_command=_finite(
+            manual.get("maximum_command", 0.10), "manual_control.maximum_command"
+        ),
+        command_step=_finite(
+            manual.get("command_step", 0.01), "manual_control.command_step"
+        ),
+        publish_rate_hz=_finite(
+            manual.get("publish_rate_hz", 20.0), "manual_control.publish_rate_hz"
+        ),
+        recovery_gain=_finite(recovery.get("gain", 0.5), "recovery.gain"),
+        recovery_max_command=_finite(
+            recovery.get("maximum_command", 0.05), "recovery.maximum_command"
+        ),
+        recovery_tolerance_m=_finite(
+            recovery.get("tolerance_m", 0.05), "recovery.tolerance_m"
+        ),
+        recovery_settle_s=_finite(
+            recovery.get("settle_s", 1.0), "recovery.settle_s"
+        ),
+        recovery_timeout_s=_finite(
+            recovery.get("timeout_s", 60.0), "recovery.timeout_s"
+        ),
+        maximum_telemetry_age_s=_finite(
+            safety.get("maximum_telemetry_age_s", 1.50),
+            "safety.maximum_telemetry_age_s",
+        ),
+        maximum_status_age_s=status_age_limit,
+        maximum_attitude_age_s=_finite(
+            safety.get("maximum_attitude_age_s", 5.0),
+            "safety.maximum_attitude_age_s",
+        ),
+        allowed_flight_mode=str(
+            safety.get("allowed_flight_mode", "ALT_HOLD")
+        ).strip().upper(),
+    )
 
 
 def _unit_interval(value: Any, name: str, *, include_zero: bool = False) -> float:
@@ -635,7 +1095,7 @@ def load_autonomy_config(path: str | Path) -> AutonomyConfig:
                 mission_data.get("alignment_confirmation_frames", 3)
             ),
             target_lost_timeout_s=_finite(
-                mission_data.get("target_lost_timeout_s", 0.8),
+                mission_data.get("target_lost_timeout_s", 1.5),
                 "mission.target_lost_timeout_s",
             ),
             horizontal_tolerance=_unit_interval(
@@ -711,7 +1171,7 @@ def load_autonomy_config(path: str | Path) -> AutonomyConfig:
                 "mission.maximum_grasp_area_ratio",
             ),
             reacquire_grace_s=_finite(
-                mission_data.get("reacquire_grace_s", 0.5),
+                mission_data.get("reacquire_grace_s", 1.0),
                 "mission.reacquire_grace_s",
             ),
             reacquire_first_turn_deg=_finite(
@@ -774,19 +1234,23 @@ def load_autonomy_config(path: str | Path) -> AutonomyConfig:
                 "mission.maximum_operation_depth_m",
             ),
             maximum_heartbeat_age_s=_finite(
-                mission_data.get("maximum_heartbeat_age_s", 1.5),
+                mission_data.get("maximum_heartbeat_age_s", 2.5),
                 "mission.maximum_heartbeat_age_s",
             ),
             maximum_message_age_s=_finite(
-                mission_data.get("maximum_message_age_s", 0.8),
+                mission_data.get("maximum_message_age_s", 1.5),
                 "mission.maximum_message_age_s",
             ),
+            perception_hold_timeout_s=_finite(
+                mission_data.get("perception_hold_timeout_s", 1.0),
+                "mission.perception_hold_timeout_s",
+            ),
             maximum_perception_age_s=_finite(
-                mission_data.get("maximum_perception_age_s", 0.75),
+                mission_data.get("maximum_perception_age_s", 5.0),
                 "mission.maximum_perception_age_s",
             ),
             maximum_control_status_age_s=_finite(
-                mission_data.get("maximum_control_status_age_s", 0.75),
+                mission_data.get("maximum_control_status_age_s", 3.0),
                 "mission.maximum_control_status_age_s",
             ),
             allowed_flight_modes=tuple(
@@ -853,11 +1317,14 @@ def load_autonomy_config(path: str | Path) -> AutonomyConfig:
         mission.hard_mission_timeout_s,
         mission.maximum_heartbeat_age_s,
         mission.maximum_message_age_s,
+        mission.perception_hold_timeout_s,
         mission.maximum_perception_age_s,
         mission.maximum_control_status_age_s,
     )
     if min(*positive_distances, *positive_times) <= 0:
         raise ConfigurationError("任务时间参数必须大于 0")
+    if mission.perception_hold_timeout_s >= mission.maximum_perception_age_s:
+        raise ConfigurationError("感知回中等待时间必须小于感知硬中止时间")
     if min(
         mission.yaw_gain,
         mission.vertical_gain,

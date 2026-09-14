@@ -94,12 +94,14 @@ def reach_scanning(task: AutonomousGraspMission) -> tuple[float, int]:
     decision = task.acknowledge_gripper(
         GripperAction.OPEN, True, "accepted", first, 0.01
     )
+    assert decision.state == MissionState.PREPARING
+    decision = task.step(first, 0.01 + task.config.gripper_hold_s)
     assert decision.state == MissionState.DESCENDING
     assert decision.target_depth_m == pytest.approx(1.30)
-    task.step(observation(1, depth=1.30), 0.02)
-    decision = task.step(observation(2, depth=1.30), 0.13)
+    task.step(observation(1, depth=1.30), 0.12)
+    decision = task.step(observation(2, depth=1.30), 0.23)
     assert decision.state == MissionState.SCANNING
-    return 0.13, 2
+    return 0.23, 2
 
 
 def reach_approaching(task: AutonomousGraspMission) -> tuple[float, int]:
@@ -136,8 +138,11 @@ def test_relative_descent_is_start_depth_plus_point_three_metres() -> None:
     decision = task.acknowledge_gripper(
         GripperAction.OPEN, True, "accepted", first, 0.01
     )
+    assert decision.state == MissionState.PREPARING
+    assert decision.motion.is_neutral()
+    decision = task.step(first, 0.01 + task.config.gripper_hold_s)
     assert decision.target_depth_m == pytest.approx(2.40)
-    decision = task.step(observation(1, depth=2.10), 0.02)
+    decision = task.step(observation(1, depth=2.10), 0.12)
     assert decision.motion.vertical < 0.0
     assert abs(decision.motion.vertical) <= TEST_CONFIG.descent_max_command
 
@@ -168,6 +173,26 @@ def test_advance_uses_derived_duration_and_returns_to_scan() -> None:
     assert task.config.advance_duration_s == pytest.approx(4.0 / 3.0)
     assert decision.state == MissionState.SCANNING
     assert decision.search_cycle == 2
+
+
+def test_perception_hold_shifts_open_loop_and_global_timers() -> None:
+    """感知暂停时持续回中；恢复后不能把暂停时间算进开环前进。"""
+
+    task = new_mission()
+    now, frame = reach_scanning(task)
+    task._enter(MissionState.ADVANCING, now, observation(frame))
+    moving = task.step(observation(frame + 1), now + 0.50)
+    assert moving.state == MissionState.ADVANCING
+    started_at = task._started_at
+
+    task.delay_timers(4.0)
+    assert task._started_at == pytest.approx(started_at + 4.0)
+    resumed = task.step(observation(frame + 2), now + 4.60)
+    assert resumed.state == MissionState.ADVANCING
+    assert resumed.motion.forward == pytest.approx(task.config.advance_forward_command)
+
+    with pytest.raises(ValueError, match="暂停时长"):
+        task.delay_timers(float("nan"))
 
 
 def test_acquisition_selects_largest_box_before_confidence() -> None:

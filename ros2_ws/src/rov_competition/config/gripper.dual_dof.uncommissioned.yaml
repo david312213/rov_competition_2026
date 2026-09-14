@@ -1,0 +1,22 @@
+# TEMPLATE ONLY: merge this profile into a bench COPY of robot.yaml.
+# Nulls deliberately prevent loading/activation. Do not guess channel or PWM.
+# Keep dalian/rst profiles unchanged. The old rotation output is now lift,
+# but its absolute output number MUST be verified on this robot.
+gripper:
+  active_profile: dual_dof
+  profiles:
+    dual_dof:
+      calibrated: false
+      allow_extended_pwm: false
+      step_interval_s: null
+      pwm_min: null
+      pwm_max: null
+      action_wait_s: {open: null, close: null, raise: null, reset: null}
+      outputs:
+        - output_channel: null
+          open: {start_pwm: null, end_pwm: null, step_pwm: null}
+          close: {start_pwm: null, end_pwm: null, step_pwm: null}
+      lift:
+        output_channel: null
+        raise: {start_pwm: null, end_pwm: null, step_pwm: null}
+        reset: {start_pwm: null, end_pwm: null, step_pwm: null}

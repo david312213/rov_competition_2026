@@ -1,4 +1,4 @@
-# ROV 自主抓取候选版 0.2.0rc1
+# ROV 自主抓取候选版 0.2.0rc2
 #
 # 现场人员优先只调 field_tuning。这些初值是“待水池标定的起点”，
 # 不是实艇已验证结论。标定完成前，真实自主启动会明确拒绝。
@@ -32,7 +32,7 @@ field_tuning:
     echinus: 0.18
     holothurian: 0.18
     scallop: 0.18
-    starfish: 0.18
+    snail: 0.18
   grasp_area_confirmation_frames: 3
 
   # 完成或无目标退出时，上升到这个绝对深度再结束。
@@ -45,17 +45,17 @@ field_tuning:
 
 detector:
   model_path: "../models/seafood_yolo26x.pt"
-  expected_sha256: "300eb3d98ae586c1c5b26b87b3a1baf6450bf6ef367acad4fc5129622ce20a23"
+  expected_sha256: "787b22100b6b9ee3c0b5aefce434a194c686b647a0c182beb4add38a0cc8fe2b"
   confidence_threshold: 0.45
   iou_threshold: 0.50
   image_size: 640
-  device: "auto"
+  # 固定使用第一张 NVIDIA 显卡，避免环境串包后静默退回 CPU。
+  device: "0"
   class_names:
     - "echinus"
     - "holothurian"
     - "scallop"
-    - "starfish"
-    - "waterweeds"
+    - "snail"
 
 mission:
   # 真实自主的两道授权门。离线识别/回放不受它们影响。
@@ -64,7 +64,7 @@ mission:
 
   detection_confirmation_frames: 5
   alignment_confirmation_frames: 3
-  target_lost_timeout_s: 0.8
+  target_lost_timeout_s: 1.5
   horizontal_tolerance: 0.08
   vertical_tolerance: 0.10
   yaw_gain: 0.5
@@ -90,12 +90,14 @@ mission:
   approach_timeout_s: 30.0
   maximum_grasp_area_ratio: 0.80
 
-  reacquire_grace_s: 0.5
+  reacquire_grace_s: 1.0
   reacquire_first_turn_deg: 60.0
   reacquire_second_turn_deg: 120.0
   reacquire_yaw_command: 0.05
   reacquire_timeout_s: 90.0
 
+  # 必须不小于 robot.yaml 最长开/闭爪渐变时间。
+  # 默认曲线最长 11 个间隔 × 0.125s = 1.375s。
   gripper_hold_s: 1.5
   gripper_command_timeout_s: 3.0
 
@@ -111,10 +113,12 @@ mission:
   # 实艇完全浸没后的最小深度起点；0.30m 仍须用实物外形和深度零点确认。
   minimum_start_depth_m: 0.30
   maximum_operation_depth_m: 20.0
-  maximum_heartbeat_age_s: 1.5
-  maximum_message_age_s: 0.8
-  maximum_perception_age_s: 0.75
-  maximum_control_status_age_s: 0.75
+  maximum_heartbeat_age_s: 2.5
+  maximum_message_age_s: 1.5
+  # 1 秒后先回中并冻结状态计时；超过 5 秒才急停中止。
+  perception_hold_timeout_s: 1.0
+  maximum_perception_age_s: 5.0
+  maximum_control_status_age_s: 3.0
   allowed_flight_modes:
     - "ALT_HOLD"
 

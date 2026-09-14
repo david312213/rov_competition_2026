@@ -1,5 +1,6 @@
-"""自主任务飞控遥测安全门测试。"""
+"""控制网关与自主任务共用安全门测试。"""
 
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -7,8 +8,12 @@ from rov_competition.config import load_autonomy_config
 from rov_competition.safety import (
     AutonomyControlStatus,
     AutonomyTelemetryStatus,
+    PerceptionFreshness,
     autonomy_control_error,
     autonomy_safety_error,
+    classify_perception_age,
+    is_fresh_telemetry,
+    validate_command_envelope,
 )
 
 PACKAGE = (
@@ -61,6 +66,21 @@ def healthy_control_status() -> AutonomyControlStatus:
     )
 
 
+def command_envelope_error(**overrides):
+    """使用一组合法默认值执行运动命令封套检查。"""
+
+    arguments = {
+        "source": "commissioning",
+        "expected_source": "commissioning",
+        "values": (0.05, 0.0, 0.0, 0.0),
+        "stamp_s": 100.0,
+        "now_s": 100.1,
+        "maximum_age_s": 0.50,
+    }
+    arguments.update(overrides)
+    return validate_command_envelope(**arguments)
+
+
 def test_healthy_telemetry_allows_autonomy() -> None:
     """实时、已解锁、已入水且姿态有效时允许启动。"""
 
@@ -82,6 +102,18 @@ def test_missing_or_stale_telemetry_blocks_autonomy() -> None:
         healthy_status(), heartbeat_age_s=MISSION.maximum_heartbeat_age_s + 0.1
     )
     assert "心跳过期" in autonomy_safety_error(stale, MISSION)
+
+
+def test_balanced_heartbeat_boundary_is_two_point_five_seconds() -> None:
+    """2.5 秒边界本身可接受，越过边界才拒绝。"""
+
+    assert MISSION.maximum_heartbeat_age_s == 2.5
+    assert autonomy_safety_error(
+        replace(healthy_status(), heartbeat_age_s=2.5), MISSION
+    ) is None
+    assert "心跳过期" in autonomy_safety_error(
+        replace(healthy_status(), heartbeat_age_s=2.5001), MISSION
+    )
 
 
 def test_unarmed_or_out_of_water_blocks_autonomy() -> None:
@@ -173,3 +205,52 @@ def test_fake_gateway_requires_preflight_runtime_and_ros_arming() -> None:
             now=100.1,
         )
         assert expected in error
+
+
+def test_telemetry_timestamp_expires() -> None:
+    """旧深度或姿态不得被持续当作实时数据发布。"""
+
+    assert is_fresh_telemetry(10.0, now=10.5, timeout_s=1.0) is True
+    assert is_fresh_telemetry(10.0, now=11.1, timeout_s=1.0) is False
+    assert is_fresh_telemetry(None, now=10.0, timeout_s=1.0) is False
+
+
+def test_fresh_expected_command_source_is_accepted() -> None:
+    assert command_envelope_error() is None
+
+
+def test_half_second_command_timestamp_boundary_is_preserved() -> None:
+    """允许半秒调度抖动，但超过半秒的旧命令仍被拒绝。"""
+
+    assert command_envelope_error(stamp_s=99.5, now_s=100.0) is None
+    assert "过期" in command_envelope_error(stamp_s=99.499, now_s=100.0)
+
+
+def test_perception_age_has_fresh_hold_and_abort_zones() -> None:
+    """1～5 秒只回中等待，超过 5 秒才进入硬中止。"""
+
+    classify = lambda age: classify_perception_age(
+        age, hold_timeout_s=1.0, abort_timeout_s=5.0
+    )
+    assert classify(1.0) == PerceptionFreshness.FRESH
+    assert classify(1.001) == PerceptionFreshness.HOLD
+    assert classify(5.0) == PerceptionFreshness.HOLD
+    assert classify(5.001) == PerceptionFreshness.ABORT
+    assert classify(float("inf")) == PerceptionFreshness.ABORT
+
+
+def test_wrong_command_source_is_rejected() -> None:
+    assert "非法命令来源" in command_envelope_error(source="autonomy")
+
+
+def test_missing_stale_and_future_command_timestamps_are_rejected() -> None:
+    assert "缺少" in command_envelope_error(stamp_s=0.0)
+    assert "过期" in command_envelope_error(stamp_s=99.0)
+    assert "超前" in command_envelope_error(stamp_s=101.0)
+
+
+def test_invalid_command_numbers_are_rejected() -> None:
+    assert "NaN/Inf" in command_envelope_error(
+        values=(math.nan, 0.0, 0.0, 0.0)
+    )
+    assert "[-1, 1]" in command_envelope_error(values=(1.01, 0.0, 0.0, 0.0))

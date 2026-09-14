@@ -7,10 +7,9 @@ YOLO 推理帧率可能随 GPU 负载波动，但飞控网关的命令看门狗�
 
 from __future__ import annotations
 
-import math
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import rclpy
@@ -44,11 +43,20 @@ from rov_competition.mission import AutonomousGraspMission
 from rov_competition.safety import (
     AutonomyControlStatus,
     AutonomyTelemetryStatus,
+    PerceptionFreshness,
     autonomy_control_error,
     autonomy_safety_error,
+    classify_perception_age,
 )
 from rov_competition.targets import load_target_config
-from rov_competition.video import OpenCvVideoSource, VideoSourceError, build_udp_mpegts_url
+from rov_competition.video import (
+    GStreamerVideoSource,
+    OpenCvVideoSource,
+    VideoSourceError,
+    build_udp_mpegts_url,
+    build_udp_rtp_h264_gstreamer_pipeline,
+    should_retry_live_video_interruption,
+)
 
 
 @dataclass(frozen=True)
@@ -79,14 +87,18 @@ class AutonomyNode(Node):
         super().__init__("rov_autonomy")
         self.declare_parameter("robot_config", "config/robot.example.yaml")
         self.declare_parameter("autonomy_config", "config/autonomy.yaml")
-        self.declare_parameter("targets_config", "config/grasp_targets.yaml")
+        self.declare_parameter("targets_config", "config/targets.yaml")
         self.declare_parameter("video_source", "0")
         self.declare_parameter("gstreamer", False)
         self.declare_parameter("udp_mpegts", False)
-        self.declare_parameter("display_window", True)
+        self.declare_parameter("display_window", False)
         self.declare_parameter("annotated_rtp_host", "")
         self.declare_parameter("annotated_rtp_port", 0)
         self.declare_parameter("command_source", "autonomy")
+        # 搜索—接近水池测试复用本节点的 GPU 感知链，但任务状态与
+        # 运动指令由独立 commissioning 节点发布。该模式不发布冲突的
+        # /rov/mission/status，也不开放正式自主启动/中止服务。
+        self.declare_parameter("perception_only", False)
 
         robot_path = str(self.get_parameter("robot_config").value)
         autonomy_path = str(self.get_parameter("autonomy_config").value)
@@ -95,8 +107,14 @@ class AutonomyNode(Node):
         use_gstreamer = self._boolean_parameter("gstreamer")
         use_udp_mpegts = self._boolean_parameter("udp_mpegts")
         self._display_window = self._boolean_parameter("display_window")
+        self._perception_only = self._boolean_parameter("perception_only")
         if use_gstreamer and use_udp_mpegts:
             raise ValueError("gstreamer 和 udp_mpegts 不能同时启用")
+        if self._display_window:
+            raise ValueError(
+                "display_window 必须保持 false；请订阅 "
+                "/rov/annotated_image/compressed 查看带框画面"
+            )
 
         self._robot_config = load_robot_config(robot_path)
         self._config = load_autonomy_config(autonomy_path)
@@ -129,10 +147,17 @@ class AutonomyNode(Node):
             self._mission = AutonomousGraspMission(
                 self._config.mission, self._target_config.graspable_labels
             )
-            self._video = OpenCvVideoSource(
-                _source_value(video_source, udp_mpegts=use_udp_mpegts),
-                gstreamer=use_gstreamer,
-            )
+            if use_gstreamer:
+                pipeline = (
+                    build_udp_rtp_h264_gstreamer_pipeline(int(video_source))
+                    if video_source.isdecimal()
+                    else video_source
+                )
+                self._video = GStreamerVideoSource(pipeline)
+            else:
+                self._video = OpenCvVideoSource(
+                    _source_value(video_source, udp_mpegts=use_udp_mpegts)
+                )
             self._video.open()
         except Exception:
             if self._annotated_writer is not None:
@@ -157,7 +182,11 @@ class AutonomyNode(Node):
         self._active = False
         self._failed = False
         self._destroying = False
+        self._live_video_source = use_gstreamer
+        self._video_recovery_pending = False
+        self._last_video_warning_monotonic = 0.0
         self._terminal_action_started = False
+        self._perception_hold_started_at: float | None = None
         self._frame_id = 0
         self._perception: PerceptionSnapshot | None = None
         self._telemetry_status: AutonomyTelemetryStatus | None = None
@@ -190,7 +219,7 @@ class AutonomyNode(Node):
             10,
             callback_group=telemetry_group,
         )
-        self._start_services = [
+        self._start_services = [] if self._perception_only else [
             self.create_service(
                 Trigger,
                 name,
@@ -199,7 +228,7 @@ class AutonomyNode(Node):
             )
             for name in ("/rov/mission/start", "/rov/autonomy/start")
         ]
-        self._abort_services = [
+        self._abort_services = [] if self._perception_only else [
             self.create_service(
                 Trigger,
                 name,
@@ -224,7 +253,12 @@ class AutonomyNode(Node):
             0.05, self._control_tick, callback_group=control_group
         )
         self.get_logger().info(
-            "Model/video ready; detection is active; autonomous motion is NOT started"
+            "Model/video ready; detection is active; "
+            + (
+                "perception-only mode; this node cannot start autonomous motion"
+                if self._perception_only
+                else "autonomous motion is NOT started"
+            )
         )
 
     def _boolean_parameter(self, name: str) -> bool:
@@ -276,6 +310,7 @@ class AutonomyNode(Node):
                 self._config.mission, self._target_config.graspable_labels
             )
             self._terminal_action_started = False
+            self._perception_hold_started_at = None
             self._active = True
             decision = self._mission.start(observation, now)
             self._publish_decision(decision, observation, publish_motion=True)
@@ -378,6 +413,13 @@ class AutonomyNode(Node):
             yaw_deg=telemetry.yaw_deg,
         )
 
+    def _perception_age_s(self, now: float) -> float:
+        """返回最新检测帧年龄；尚无任何帧时视为无限大。"""
+
+        if self._perception is None:
+            return float("inf")
+        return max(0.0, now - self._perception.received_monotonic)
+
     def _control_tick(self) -> None:
         """固定 20 Hz 执行安全检查、机械爪响应和状态机。"""
 
@@ -386,16 +428,26 @@ class AutonomyNode(Node):
             observation = self._build_observation(now)
             self._poll_gripper_future(observation, now)
             if not self._active:
-                self._publish_mission_status(self._latest_decision, observation)
+                if not self._perception_only:
+                    self._publish_mission_status(self._latest_decision, observation)
                 return
             telemetry_error = autonomy_safety_error(
                 self._telemetry_status, self._config.mission, now=now
             )
             control_error = self._control_status_error(now)
+            perception_age = self._perception_age_s(now)
+            perception_state = classify_perception_age(
+                perception_age,
+                hold_timeout_s=self._config.mission.perception_hold_timeout_s,
+                abort_timeout_s=self._config.mission.maximum_perception_age_s,
+            )
             if observation is None:
                 error = "感知或遥测快照缺失"
-            elif not observation.perception_valid:
-                error = "感知图像已过期"
+            elif perception_state == PerceptionFreshness.ABORT:
+                error = (
+                    f"感知图像已过期 {perception_age:.2f}s，超过 "
+                    f"{self._config.mission.maximum_perception_age_s:.2f}s"
+                )
             else:
                 error = telemetry_error or control_error
             if error is not None:
@@ -406,6 +458,29 @@ class AutonomyNode(Node):
                 return
 
             assert observation is not None
+            if perception_state == PerceptionFreshness.HOLD:
+                if self._perception_hold_started_at is None:
+                    self._perception_hold_started_at = now
+                    self.get_logger().warning(
+                        f"感知暂停 {perception_age:.2f}s；四轴回中并冻结任务计时"
+                    )
+                decision = replace(
+                    self._latest_decision,
+                    motion=MotionCommand.neutral(),
+                    message=(
+                        f"感知暂停 {perception_age:.2f}s，四轴回中等待；"
+                        f"{self._config.mission.maximum_perception_age_s:.1f}s 后硬中止"
+                    ),
+                )
+                self._publish_decision(decision, observation, publish_motion=True)
+                return
+            if self._perception_hold_started_at is not None:
+                paused_duration_s = now - self._perception_hold_started_at
+                self._mission.delay_timers(paused_duration_s)
+                self._perception_hold_started_at = None
+                self.get_logger().info(
+                    f"感知恢复；任务计时顺延 {paused_duration_s:.2f}s"
+                )
             decision = self._mission.step(observation, now)
             self._publish_decision(decision, observation, publish_motion=True)
             if decision.gripper != GripperAction.NONE:
@@ -474,10 +549,17 @@ class AutonomyNode(Node):
     def _process_frame(self) -> None:
         """感知循环：读图、YOLO 推理、更新快照并发布带框画面。"""
 
-        ok, frame = self._video.read()
-        if not ok:
-            self._fail_safe("相机断流或录像结束")
+        try:
+            ok, frame = self._video.read()
+        except VideoSourceError as exc:
+            self._handle_video_interruption(str(exc))
             return
+        if not ok:
+            self._handle_video_interruption("相机断流或录像结束")
+            return
+        if self._video_recovery_pending:
+            self._video_recovery_pending = False
+            self.get_logger().info("YOLO 视频已经自动恢复")
         try:
             detections = self._detector.detect(frame)
         except DetectorError as exc:
@@ -519,6 +601,54 @@ class AutonomyNode(Node):
         self._publish_image(annotated)
         self._display_image(annotated)
         self._publish_annotated_rtp(annotated)
+
+    def _handle_video_interruption(self, reason: str) -> None:
+        """只读测试自动重连直播；真实任务仍按原安全策略立即中止。"""
+
+        with self._state_lock:
+            mission_active = self._active
+        if not should_retry_live_video_interruption(
+            live_stream=self._live_video_source,
+            mission_active=mission_active,
+        ):
+            # 活动任务不再因一帧读取失败立刻急停。控制循环会在 1s 后
+            # 回中冻结，并在配置的 5s 硬阈值后中止；录像结束也遵循同一规则。
+            if mission_active:
+                now = time.monotonic()
+                if now - self._last_video_warning_monotonic >= 1.0:
+                    self._last_video_warning_monotonic = now
+                    self.get_logger().warning(
+                        f"{reason}；等待视频恢复，控制循环将按感知年龄回中/中止"
+                    )
+                return
+            self._fail_safe(reason)
+            return
+
+        now = time.monotonic()
+        should_log = (
+            not self._video_recovery_pending
+            or now - self._last_video_warning_monotonic >= 10.0
+        )
+        self._video_recovery_pending = True
+        if should_log:
+            self._last_video_warning_monotonic = now
+            if mission_active:
+                self.get_logger().warning(
+                    f"{reason}；正在重建 YOLO 解码管线，"
+                    "活动任务已按感知年龄回中/计时"
+                )
+            else:
+                self.get_logger().warning(
+                    f"{reason}；自主任务未启动，正在重建 "
+                    "YOLO 解码管线，QGC 不受影响"
+                )
+
+        try:
+            self._video.release()
+            self._video.open()
+        except VideoSourceError as exc:
+            if should_log:
+                self.get_logger().warning(f"YOLO 视频重连尚未成功: {exc}")
 
     def _publish_decision(
         self,

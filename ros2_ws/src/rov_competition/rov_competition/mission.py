@@ -160,23 +160,10 @@ class AutonomousGraspMission:
         self._gripper_command_accepted = True
         self._gripper_accepted_at = now
         if action == GripperAction.OPEN and self.state == MissionState.PREPARING:
-            error = self._observation_error(observation)
-            if error:
-                return self._abort(error, observation, now)
-            self._start_depth_m = observation.depth_m
-            self._target_depth_m = observation.depth_m + self.config.descent_delta_m
-            if self._target_depth_m > self.config.maximum_operation_depth_m:
-                return self._abort(
-                    "相对下潜目标超过最大作业深度", observation, now
-                )
-            self._enter(MissionState.DESCENDING, now, observation)
             return self._decision(
                 MotionCommand.neutral(),
                 observation,
-                message=(
-                    f"开爪命令已接受；从 {self._start_depth_m:.2f} m "
-                    f"下潜到 {self._target_depth_m:.2f} m"
-                ),
+                message="开爪渐变已接受，四轴保持中位等待发完",
             )
         if action == GripperAction.CLOSE and self.state == MissionState.GRASPING:
             self._grasp_attempts += 1
@@ -193,6 +180,32 @@ class AutonomousGraspMission:
         """外部中止入口；无论原状态都立即四轴回中。"""
 
         return self._abort(reason or "外部紧急中止", observation, now)
+
+    def delay_timers(self, paused_duration_s: float) -> None:
+        """感知软暂停恢复后，顺延所有与动作有关的单调时钟基准。
+
+        暂停期间上层只发布中位，不能把这段时间计入扫描、开环前进、
+        目标丢失、机械爪保持或任务总时限。这里只移动已有时间锚点，
+        不改变状态、帧号、目标锁和任何控制输出。
+        """
+
+        if not math.isfinite(paused_duration_s) or paused_duration_s < 0.0:
+            raise ValueError("暂停时长必须是非负有限数")
+        if paused_duration_s == 0.0:
+            return
+        for attribute in (
+            "_started_at",
+            "_state_started_at",
+            "_last_now",
+            "_settled_since",
+            "_last_target_seen_at",
+            "_last_yaw_progress_at",
+            "_last_control_at",
+            "_gripper_accepted_at",
+        ):
+            value = getattr(self, attribute)
+            if value is not None:
+                setattr(self, attribute, value + paused_duration_s)
 
     def step(self, observation: MissionObservation, now: float) -> MissionDecision:
         """运行一次固定频率控制周期。"""
@@ -308,12 +321,40 @@ class AutonomousGraspMission:
     def _step_preparing(
         self, observation: MissionObservation, now: float
     ) -> MissionDecision:
-        """等待带确认的开爪服务响应。"""
+        """等待开爪请求被接受，并给渐变曲线留出完整时间。"""
 
-        if self._elapsed(now) >= self.config.gripper_command_timeout_s:
-            return self._abort("打开机械爪的服务响应超时", observation, now)
+        if not self._gripper_command_accepted:
+            if self._elapsed(now) >= self.config.gripper_command_timeout_s:
+                return self._abort("打开机械爪的服务响应超时", observation, now)
+            return self._decision(
+                MotionCommand.neutral(), observation, message="等待网关确认开爪命令"
+            )
+        if self._gripper_accepted_at is None:
+            return self._abort("开爪接受时间丢失", observation, now)
+        elapsed = now - self._gripper_accepted_at
+        if elapsed < self.config.gripper_hold_s:
+            return self._decision(
+                MotionCommand.neutral(),
+                observation,
+                message=(
+                    f"开爪渐变发送中，四轴保持中位 "
+                    f"{elapsed:.2f}/{self.config.gripper_hold_s:.2f}s"
+                ),
+            )
+
+        # 开爪等待结束后再记录启动深度，避免在爪子扫动期间就开始下潜。
+        self._start_depth_m = observation.depth_m
+        self._target_depth_m = observation.depth_m + self.config.descent_delta_m
+        if self._target_depth_m > self.config.maximum_operation_depth_m:
+            return self._abort("相对下潜目标超过最大作业深度", observation, now)
+        self._enter(MissionState.DESCENDING, now, observation)
         return self._decision(
-            MotionCommand.neutral(), observation, message="等待网关确认开爪命令"
+            MotionCommand.neutral(),
+            observation,
+            message=(
+                f"开爪等待结束；从 {self._start_depth_m:.2f} m "
+                f"下潜到 {self._target_depth_m:.2f} m"
+            ),
         )
 
     def _step_descending(

@@ -7,6 +7,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ControlStatus.msg"
+  "msg/GripperExecutionStatus.msg"
   "msg/MissionStatus.msg"
   "msg/NormalizedMotionCommand.msg"
   "msg/RobotTelemetry.msg"

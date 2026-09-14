@@ -40,7 +40,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="config/autonomy.yaml", help="自主配置 YAML")
     parser.add_argument(
         "--targets",
-        default="config/grasp_targets.yaml",
+        default="config/targets.yaml",
         help="允许抓取类别 YAML",
     )
     parser.add_argument("--output", help="可选的标注录像输出路径，例如 output.mp4")

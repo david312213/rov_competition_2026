@@ -133,6 +133,8 @@ class GripperAction(str, Enum):
     NONE = "none"
     OPEN = "open"
     CLOSE = "close"
+    RAISE = "raise"
+    RESET = "reset"
 
 
 class MissionState(str, Enum):

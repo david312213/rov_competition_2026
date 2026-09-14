@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>rov_competition</name>
+  <!-- ROS 清单要求 X.Y.Z；候选版完整名称见根目录 VERSION。 -->
   <version>0.2.0</version>
   <description>2026 全国水下机器人大赛 ROV 作业赛道控制、感知和展示软件。</description>
   <maintainer email="team@example.invalid">ROV Team</maintainer>
@@ -8,6 +9,7 @@
 
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>python3-gi</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rov_interfaces</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
