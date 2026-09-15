@@ -1,0 +1,81 @@
+# 持续盲抓入口的唯一参数模板。
+# 先复制到根目录 config/blind_grab.local.yaml，填写全部动作相关 null。
+# null 表示尚不知道的实艇参数；程序不猜舵机接线、PWM 或动作时长。
+# 启动前由操作员完成作业高度、飞控模式与解锁；启动即开始搜索。
+
+trigger:
+  required_boxes: 4
+  confirmation_frames: 5
+  confirmation_duration_s: 1.0
+  missing_frame_timeout_s: 1.0
+  # 只统计搜索和停车确认时间；到时 4 直接变成 0。
+  fallback_after_s: 30.0
+
+search:
+  # 原蛇形入口每次询问的“每带前进秒数”，在这里填写后无需重复输入。
+  lane_forward_duration_s: null
+  forward_command: 0.23
+  shift_command: 0.20
+  shift_duration_s: 4.5
+  turn_command: 0.20
+  turn_duration_s: 11.5
+
+grab:
+  grabs_per_batch: 3
+  forward_command: 0.23
+  advance_duration_s: null
+  # 转到筐上方后开爪，保持这么久再让机械臂回位。
+  release_duration_s: null
+
+actions:
+  # output_channel 是飞控绝对 SERVO 编号，不会自动加 8。
+  # 一次动作需要多路舵机时，在 outputs 中追加条目。
+  open_gripper:
+    duration_s: null
+    outputs:
+      - output_channel: null
+        pwm: null
+  close_gripper:
+    duration_s: null
+    outputs:
+      - output_channel: null
+        pwm: null
+  arm_to_basket:
+    duration_s: null
+    outputs:
+      - output_channel: null
+        pwm: null
+  arm_to_grasp:
+    duration_s: null
+    outputs:
+      - output_channel: null
+        pwm: null
+
+mavlink:
+  connection_uri: "udpin:0.0.0.0:14551"
+  baud: 115200
+  source_system: 255
+  source_component: 191
+  # 如果实艇地址不是 1/1，填写实艇的 MAVLink system/component ID。
+  target_system: 1
+  target_component: 1
+  directions:
+    forward: 1
+    lateral: 1
+    vertical: 1
+    yaw: 1
+
+vision:
+  target_labels: ["scallop"]
+  # 本值也写入本次独立感知配置，避免上游仍用 0.45 先过滤目标。
+  confidence: 0.18
+  # 已经另行启动了视频分发和感知时设 false，仍订阅 /rov/detections。
+  start_helpers: true
+  show_viewer: true
+  record_video: false
+  source_port: 5700
+  inference_port: 5702
+  record_port: 5704
+  # 这两个 null 表示使用本包同名配置；也可填实艇配置的绝对路径。
+  robot_config: null
+  autonomy_config: null

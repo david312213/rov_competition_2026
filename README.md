@@ -1,5 +1,11 @@
 # ROV 比赛工作空间
 
+新增独立入口：[持续盲抓兜底](docs/持续盲抓README.md)。
+启动 `bash scripts/start_blind_grab.sh`：4框稳定后每批抓取投放3次，找框累计30秒后永久盲抓。
+先填写 `config/blind_grab.local.yaml` 的动作参数；本入口启动即运行，由操作员提前就位、设置模式和解锁，手动关闭结束。
+
+以下为原有任务入口及其说明。
+
 新增本地策略：[半圆搜索与局部抓取](docs/半圆搜索与局部抓取.md)。
 入口 `scripts/start_semicircle_collection_test.sh`；需填写现场配置，默认不能实艇执行。
 使用单目标多次重试替代固定群体三次盲抓，位置仅为航向与指令时间推算。
