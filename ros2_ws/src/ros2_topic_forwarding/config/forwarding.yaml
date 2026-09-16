@@ -1,0 +1,7 @@
+topic_forwarding:
+
+  ros__parameters:
+
+    server_ip: "api.bjetone.com"
+
+    server_port: 40184

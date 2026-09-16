@@ -4,7 +4,7 @@
 
 **人工就位 → 蛇形搜索 → 4框稳定 → 连续抓取投放10次 → 再观察；找框累计30秒或检测流中途断开1秒后，直接永久盲抓。**
 
-启动命令是 `bash scripts/start_blind_grab.sh`，Python/ROS安装入口为 `rov_blind_grab`。
+启动命令是 `bash scripts/start_blind_grab.sh`，Python/ROS安装入口为 `rov_blind_grab`。默认同时发布比赛官方ROS话题并监督官方TCP转发节点。
 这个入口不调用原搜索脚本、原控制网关、预检或许可服务，不自动触底、上浮、切换飞控模式或解锁；没有任务总时限、累计抓取上限和视觉故障取消条件。
 
 ## 1. 当前实艇配置
@@ -26,6 +26,7 @@ cp ros2_ws/src/rov_competition/config/blind_grab.yaml config/blind_grab.local.ya
 | `actions.close_gripper` | S11发送1800，等待0.5秒 |
 | `actions.arm_to_basket` | S10发送900，等待1.8秒 |
 | `actions.arm_to_grasp` | S10发送1800，等待2秒 |
+| `official_ros.server_port` | 官方包提供的平台TCP端口40184 |
 
 每个动作的 `outputs` 可以填写多路舵机。`output_channel` 是飞控的**绝对 SERVO 输出号**，不会自动加8。夹爪和机械臂使用各自的通道；开/闭爪通常使用同一组夹爪通道，转筐/回位通常使用同一组机械臂通道。
 
@@ -42,9 +43,19 @@ cp ros2_ws/src/rov_competition/config/blind_grab.yaml config/blind_grab.local.ya
 
 默认使用 `MANUAL_CONTROL`，前进0.23、横移0.20、转艇0.20。各轴符号在 `mavlink.directions` 中填写；没有旧网关的额外统一限幅或斜率限制。接口取值为归一化的 `[-1, 1]`。
 
-MAVLink连接默认 `udpin:0.0.0.0:14551`，目标ID默认1/1；如果实艇使用其他端点或ID，在此文件修改。
+MAVLink连接默认 `udpin:0.0.0.0:14551`，目标ID默认1/1；如果实艇使用其他端点或ID，在此文件修改。官方ROS旁路从同一连接已经收到的报文提取真实遥测，不等待遥测，也不以遥测有效性决定是否继续抓取。
+
+比赛方提供的 `ros2_topic_forwarding` 包位于 `ros2_ws/src/ros2_topic_forwarding/`。模板默认连接 `api.bjetone.com:40184`；如果平台重新分配端口，只改本机 `official_ros.server_port`。
 
 ## 2. 启动与关闭
+
+旧电脑首次拉取本分支后，可以一次完成依赖安装、ROS构建和官方接口离线检查：
+
+```bash
+./scripts/prepare_blind_grab_old_pc.sh
+```
+
+详细更新与现场检查步骤见[官方ROS转发与旧电脑启动](官方ROS转发与旧电脑启动.md)。
 
 先由你们将艇放到抓取高度，在QGC设好工作模式并解锁。关闭旧网关和其他运动控制入口，让本入口使用自己的MAVLink连接；程序本身不会检查或自动关闭其他控制程序。
 
@@ -59,6 +70,14 @@ bash scripts/start_blind_grab.sh --dry-run
 ```bash
 bash scripts/start_blind_grab.sh
 ```
+
+这一个入口会同时启动盲抓、官方ROS发布器和官方TCP转发节点。启动后另开终端执行：
+
+```bash
+./scripts/check_official_ros.sh --live
+```
+
+它会核对官方节点、`/cmd_vel`、`/cmd_accel`、`/robot_data` 和到平台端口的TCP连接。
 
 启动即开始搜索，同时给出开爪和机械臂抓取位指令。不需要确认词、额外许可服务或再按开始键。**在运行终端按 `Ctrl+C` 结束抓取**；`SIGTERM` 和终端关闭产生的 `SIGHUP` 也走正常关闭流程：停止循环，发送运动归中、释放控制，然后清理本入口启动的辅助进程。
 
@@ -112,11 +131,11 @@ bash scripts/start_blind_grab.sh --no-helpers
 
 程序不会替你们修改艇端的第二路视频发送配置，也不会占用QGC的5600。与原始压缩包一样，本交付不包含 `.pt` 权重；沿用你们已部署的权重，必要时通过 `vision.autonomy_config` 指向已有配置。
 
-视频分发、YOLO、查看器和可选录像由辅助线程启动，主控制不等待它们就绪。启动后始终没有收到过检测帧时，仍按原规则搜索并在30秒后进入永久盲抓；检测流一旦正常出过帧，随后连续1秒没有新帧就立即进入永久盲抓。有效的0框消息表示画面仍在运行，不会按断流处理。MAVLink连接/发送异常记录后持续重试。
+视频分发、YOLO、查看器和可选录像由辅助线程启动，主控制不等待它们就绪。启动后始终没有收到过检测帧时，仍按原规则搜索并在30秒后进入永久盲抓；检测流一旦正常出过帧，随后连续1秒没有新帧就立即进入永久盲抓。有效的0框消息表示画面仍在运行，不会按断流处理。MAVLink连接/发送异常记录后持续重试。官方ROS初始化、发布、服务器连接或转发节点异常也只记录并重试，不会暂停搜索、抓取或30秒计时。
 
 `vision.show_viewer` 默认开启；关闭查看器不取消抓取。`vision.record_video` 默认关闭，设为 `true` 时记录原始MKV；录像重启会使用新文件编号。
 
-终端输出当前状态、动作阶段、框数、门槛、找框累计时间、搜索带和抓取次数。带框窗口由独立感知节点绘制，抓取控制状态以终端的 `[盲抓]` 行为准。辅助日志在 `output/blind_grab_sessions/<本次会话>/logs/`。
+终端输出当前状态、动作阶段、框数、门槛、找框累计时间、搜索带和抓取次数。带框窗口由独立感知节点绘制，抓取控制状态以终端的 `[盲抓]` 行为准。辅助日志在 `output/blind_grab_sessions/<本次会话>/logs/`；官方节点日志在本次会话目录的 `official_ros_forwarder.log`。
 
 `close_commands` 是状态机安排闭爪指令的次数，`cycles` 是完成动作序列的次数；均不表示已收到ACK或实际收获数量。
 
@@ -125,6 +144,8 @@ bash scripts/start_blind_grab.sh --no-helpers
 - `blind_grab.py`：纯状态机和可冻结的蛇形进度。
 - `blind_grab_config.py`：独立动作、通信和视觉配置。
 - `blind_grab_mavlink.py`：直接运动/舵机输出和通信重试。
+- `blind_grab_official_mavlink.py`、`blind_grab_telemetry.py`：旁路解析真实MAVLink遥测。
+- `blind_grab_official.py`：官方ROS话题发布和官方TCP节点监督。
 - `blind_grab_runtime.py`：20 Hz主循环、检测接收、通信线程及手动关闭。
 - `blind_grab_helpers.py`：独立视频/感知进程管理。
 
@@ -134,6 +155,6 @@ bash scripts/start_blind_grab.sh --no-helpers
 python -m pytest -q tests/test_blind_grab*.py tests/test_semicircle_search.py
 ```
 
-测试包括虚拟时钟、1000次动作循环、丢帧/误检、原蛇形时序、辅助进程失败、通信重试，以及只连接测试自身 `127.0.0.1` 临时端口的MAVLink报文和关闭信号验证。没有连接实艇，没有验证实际行驶距离、臂爪动作时间或收获效果。
+测试包括虚拟时钟、1000次动作循环、丢帧/误检、原蛇形时序、辅助进程失败、通信重试、官方消息字段与话题、真实遥测单位换算、官方节点重启，以及只连接测试自身 `127.0.0.1` 临时端口的MAVLink报文和关闭信号验证。没有连接实艇，没有验证实际行驶距离、臂爪动作时间或收获效果。
 
 完整测试结果及未执行的现场项目见 [持续盲抓验证记录](持续盲抓验证.md)。

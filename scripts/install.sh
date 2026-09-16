@@ -42,7 +42,8 @@ sudo apt install -y \
   gstreamer1.0-plugins-base \
   gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad \
-  gstreamer1.0-plugins-ugly
+  gstreamer1.0-plugins-ugly \
+  nlohmann-json3-dev
 
 if [[ ! -d "${VENV_DIR}" ]]; then
   python3 -m venv --system-site-packages "${VENV_DIR}"

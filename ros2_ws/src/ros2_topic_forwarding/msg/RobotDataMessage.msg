@@ -1,0 +1,15 @@
+float64 roll
+float64 yaw
+float64 cabin_hmi
+float64 pitch
+float64 longitude
+float64 latitude
+float64 depth
+float64 speed
+float64 cabin_temp
+int64 times
+float64 magnetic_field
+float64 accelerated_speed
+float64 cabin_pres
+float64 battery_vol
+float64 claw_cur

@@ -20,6 +20,8 @@ from .blind_grab_config import (
 )
 from .blind_grab_helpers import OptionalHelpers
 from .blind_grab_mavlink import BlindMavlinkOutput
+from .blind_grab_official import OfficialDataService
+from .blind_grab_official_mavlink import OfficialTelemetryMavlinkOutput
 from .domain import MotionCommand
 
 
@@ -134,6 +136,25 @@ class RosDetectionWorker:
         self.thread.join(timeout=1.0)
 
 
+class DesiredOutputFanout:
+    """把同一运动目标交给MAVLink和官方ROS；任一支路失败都不阻断另一支路。"""
+
+    def __init__(self, *outputs: Any, report=say) -> None:
+        self.outputs = outputs
+        self.report = report
+        self._next_report_at = 0.0
+
+    def set_desired(self, motion: MotionCommand, servos: tuple) -> None:
+        for output in self.outputs:
+            try:
+                output.set_desired(motion, servos)
+            except Exception as exc:
+                now = time.monotonic()
+                if now >= self._next_report_at:
+                    self._next_report_at = now + 2.0
+                    self.report(f"[盲抓输出分发] {type(exc).__name__}: {exc}；其他输出继续")
+
+
 class MavlinkOutputWorker:
     """连接建立/发送异常不会阻塞状态机的30秒计时。"""
 
@@ -244,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", default=str(package_config_path("blind_grab.yaml")), help="已填写的盲抓参数文件")
     parser.add_argument("--no-helpers", action="store_true", help="不启动视频/YOLO/录像/查看器；仍接收已有 /rov/detections")
+    parser.add_argument("--no-official-ros", action="store_true", help="仅用于离线诊断：不发布或转发比赛官方ROS数据")
     parser.add_argument("--output-dir", default="output/blind_grab_sessions", help="辅助进程日志和可选录像的目录")
     parser.add_argument("--dry-run", action="store_true", help="只解析并显示配置，不连接MAVLink、不初始化ROS、不启动辅助进程")
     return parser
@@ -258,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.no_helpers:
         config = replace(config, vision=replace(config.vision, start_helpers=False))
+    if args.no_official_ros:
+        config = replace(config, official_ros=replace(config.official_ros, enabled=False))
     if args.dry_run:
         say(json.dumps(asdict(config), default=str, ensure_ascii=False, indent=2))
         return 0
@@ -276,24 +300,44 @@ def main(argv: list[str] | None = None) -> int:
     mission = BlindGrabMission(config.mission)
     buffer = DetectionBuffer(config.vision)
     detector = RosDetectionWorker(buffer, stop_event)
-    transport = BlindMavlinkOutput(config.mavlink, report=say)
-    output = MavlinkOutputWorker(transport, stop_event)
+    transport = OfficialTelemetryMavlinkOutput(
+        config.mavlink, config.official_ros, report=say,
+    )
+    mavlink_output = MavlinkOutputWorker(transport, stop_event)
     directory = Path(args.output_dir).expanduser().resolve() / (
         f"{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:8]}"
     )
+    official = OfficialDataService(
+        config.official_ros,
+        config.mavlink,
+        transport.telemetry_snapshot,
+        directory,
+        report=say,
+    )
+    output = DesiredOutputFanout(mavlink_output, official, report=say)
     helpers = OptionalHelpers(config.vision, directory, stop_event, report=say)
     say("开始持续盲抓控制：直接搜索；不自动设置模式或解锁。Ctrl+C或SIGTERM关闭。")
     say(f"配置: {config.source_path}；辅助日志: {directory}")
+    if config.official_ros.enabled:
+        say(
+            f"官方ROS数据默认开启：{config.official_ros.server_ip}:"
+            f"{config.official_ros.server_port}；失败只重试，不停止抓取"
+        )
+    else:
+        say("官方ROS数据已由命令行关闭，仅适用于离线诊断")
     try:
-        # 启动线程只派发工作，不等待ROS、模型、相机、录像或连接就绪。
-        output.start()
+        # 启动线程只派发工作，不等待ROS、官方服务器、模型、相机、录像或连接就绪。
+        mavlink_output.start()
+        official.start()
         detector.start()
         helpers.start()
         run_control_loop(mission, buffer, output, stop_event)
     finally:
         stop_event.set()
-        # 先归中/释放运动，再清理耗时的视觉和录像进程。
-        output.join()
+        official.set_desired(MotionCommand.neutral())
+        # 先归中/释放运动，再发送官方归中记录并清理辅助进程。
+        mavlink_output.join()
+        official.shutdown()
         detector.join()
         helpers.join()
         for signum, handler in previous_handlers.items():

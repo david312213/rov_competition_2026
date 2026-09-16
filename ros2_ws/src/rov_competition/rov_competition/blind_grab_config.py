@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import re
 from typing import Any
 
 from .blind_grab import BlindGrabConfig, ServoAction, ServoSetpoint
@@ -42,10 +43,26 @@ class VisionSettings:
 
 
 @dataclass(frozen=True)
+class OfficialRosSettings:
+    enabled: bool = True
+    server_ip: str = "api.bjetone.com"
+    server_port: int = 40184
+    command_rate_hz: float = 20.0
+    robot_data_rate_hz: float = 5.0
+    telemetry_stale_s: float = 5.0
+    forwarder_restart_s: float = 2.0
+    depth_message: str = "AHRS2"
+    depth_field: str = "altitude"
+    depth_multiplier: float = -1.0
+    depth_offset_m: float = 0.0
+
+
+@dataclass(frozen=True)
 class BlindGrabAppConfig:
     mission: BlindGrabConfig
     mavlink: MavlinkSettings
     vision: VisionSettings
+    official_ros: OfficialRosSettings
     source_path: Path
 
 
@@ -207,6 +224,51 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
         robot_config=config_file("robot_config", "robot.example.yaml"),
         autonomy_config=config_file("autonomy_config", "autonomy.yaml"),
     )
+
+    official_root = section(root, "official_ros")
+    server_ip = official_root.get("server_ip", "api.bjetone.com")
+    if not isinstance(server_ip, str) or not server_ip.strip():
+        errors.append("official_ros.server_ip: 请填写比赛平台域名或IP")
+        server_ip = "api.bjetone.com"
+    depth_root = section(official_root, "depth")
+    depth_message = str(depth_root.get("message", "AHRS2")).upper()
+    depth_field = str(depth_root.get("field", "altitude"))
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", depth_message):
+        errors.append("official_ros.depth.message: 必须是MAVLink消息名称")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", depth_field):
+        errors.append("official_ros.depth.field: 必须是MAVLink字段名称")
+    depth_multiplier = number(
+        depth_root.get("multiplier", -1.0),
+        "official_ros.depth.multiplier",
+        positive=False,
+    )
+    if depth_multiplier == 0.0:
+        errors.append("official_ros.depth.multiplier: 不能为0")
+    official_ros = OfficialRosSettings(
+        enabled=boolean(official_root.get("enabled", True), "official_ros.enabled"),
+        server_ip=server_ip.strip(),
+        server_port=integer(
+            official_root.get("server_port", 40184), "official_ros.server_port", 65535,
+        ),
+        command_rate_hz=number(
+            official_root.get("command_rate_hz", 20.0), "official_ros.command_rate_hz",
+        ),
+        robot_data_rate_hz=number(
+            official_root.get("robot_data_rate_hz", 5.0), "official_ros.robot_data_rate_hz",
+        ),
+        telemetry_stale_s=number(
+            official_root.get("telemetry_stale_s", 5.0), "official_ros.telemetry_stale_s",
+        ),
+        forwarder_restart_s=number(
+            official_root.get("forwarder_restart_s", 2.0), "official_ros.forwarder_restart_s",
+        ),
+        depth_message=depth_message,
+        depth_field=depth_field,
+        depth_multiplier=depth_multiplier,
+        depth_offset_m=number(
+            depth_root.get("offset_m", 0.0), "official_ros.depth.offset_m", positive=False,
+        ),
+    )
     if errors:
         raise BlindGrabConfigurationError("请填写或修正以下盲抓参数：\n- " + "\n- ".join(dict.fromkeys(errors)))
-    return BlindGrabAppConfig(mission, mavlink, vision, path)
+    return BlindGrabAppConfig(mission, mavlink, vision, official_ros, path)

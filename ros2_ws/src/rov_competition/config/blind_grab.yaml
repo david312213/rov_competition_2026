@@ -68,6 +68,23 @@ mavlink:
     vertical: 1
     yaw: 1
 
+official_ros:
+  # 默认启动官方 ros2_topic_forwarding，并独立重启；转发失败不停止盲抓。
+  enabled: true
+  server_ip: "api.bjetone.com"
+  # 来自本次官方包 forwarding.yaml。若平台重新分配端口，只改本地配置。
+  server_port: 40184
+  command_rate_hz: 20.0
+  robot_data_rate_hz: 5.0
+  telemetry_stale_s: 5.0
+  forwarder_restart_s: 2.0
+  # 与现有实艇遥测定义一致：AHRS2.altitude 取负数作为深度（米）。
+  depth:
+    message: "AHRS2"
+    field: "altitude"
+    multiplier: -1.0
+    offset_m: 0.0
+
 vision:
   target_labels: ["scallop"]
   # 本值也写入本次独立感知配置，避免上游仍用 0.45 先过滤目标。

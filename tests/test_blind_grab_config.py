@@ -26,6 +26,12 @@ def test_vehicle_template_is_complete_and_uses_confirmed_action_timing():
     assert config.mission.close_gripper.duration_s == .5
     assert config.mission.arm_to_basket.duration_s == 1.8
     assert config.mission.arm_to_grasp.duration_s == 2
+    assert config.official_ros.enabled
+    assert (config.official_ros.server_ip, config.official_ros.server_port) == (
+        "api.bjetone.com", 40184,
+    )
+    assert config.official_ros.command_rate_hz == 20
+    assert config.official_ros.robot_data_rate_hz == 5
 
 
 def test_template_contains_confirmed_vehicle_arm_and_gripper_setpoints():
