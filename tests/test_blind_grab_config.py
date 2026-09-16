@@ -24,6 +24,15 @@ def test_unfilled_template_reports_all_actuator_and_timing_inputs_without_guessi
         assert name in str(error.value)
 
 
+def test_template_contains_confirmed_vehicle_arm_and_gripper_setpoints():
+    document = yaml.safe_load(package_config_path("blind_grab.yaml").read_text(encoding="utf-8"))
+    actions = document["actions"]
+    assert actions["open_gripper"]["outputs"] == [{"output_channel": 11, "pwm": 900}]
+    assert actions["close_gripper"]["outputs"] == [{"output_channel": 11, "pwm": 1800}]
+    assert actions["arm_to_basket"]["outputs"] == [{"output_channel": 10, "pwm": 900}]
+    assert actions["arm_to_grasp"]["outputs"] == [{"output_channel": 10, "pwm": 1800}]
+
+
 def test_old_software_permission_flags_and_command_limit_do_not_gate_blind_configuration(tmp_path):
     document = config_document()
     document["safety"] = {"allow_live_actuation": False, "allow_ros_arming": False, "allow_gripper_actuation": False}
