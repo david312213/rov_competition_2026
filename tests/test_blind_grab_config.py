@@ -16,12 +16,16 @@ def save(tmp_path, document):
     return path
 
 
-def test_unfilled_template_reports_all_actuator_and_timing_inputs_without_guessing():
-    with pytest.raises(BlindGrabConfigurationError) as error:
-        load_blind_grab_config(package_config_path("blind_grab.yaml"))
-    for name in ["search.lane_forward_duration_s", "grab.advance_duration_s", "grab.release_duration_s",
-                 "actions.open_gripper", "actions.close_gripper", "actions.arm_to_basket", "actions.arm_to_grasp"]:
-        assert name in str(error.value)
+def test_vehicle_template_is_complete_and_uses_confirmed_action_timing():
+    config = load_blind_grab_config(package_config_path("blind_grab.yaml"))
+    assert config.mission.lane_forward_duration_s == 20
+    assert config.mission.advance_duration_s == 1
+    assert config.mission.release_duration_s == 2
+    assert config.mission.grabs_per_batch == 10
+    assert config.mission.open_gripper.duration_s == .5
+    assert config.mission.close_gripper.duration_s == .5
+    assert config.mission.arm_to_basket.duration_s == 1.8
+    assert config.mission.arm_to_grasp.duration_s == 2
 
 
 def test_template_contains_confirmed_vehicle_arm_and_gripper_setpoints():
@@ -39,7 +43,7 @@ def test_old_software_permission_flags_and_command_limit_do_not_gate_blind_confi
     document["control"] = {"profile": "commissioning", "command_limit": .001, "expected_frame_config": None}
     c = load_blind_grab_config(save(tmp_path, document))
     assert c.mission.forward_command == .23
-    assert c.mission.grabs_per_batch == 3
+    assert c.mission.grabs_per_batch == 10
     assert c.mission.fallback_after_s == 30
     assert c.vision.confidence == .18
     assert c.vision.target_labels == ("scallop",)

@@ -47,7 +47,7 @@ class BlindGrabConfig:
     confirmation_duration_s: float = 1.0
     missing_frame_timeout_s: float = 1.0
     fallback_after_s: float = 30.0
-    grabs_per_batch: int = 3
+    grabs_per_batch: int = 10
 
 
 @dataclass(frozen=True)
@@ -156,6 +156,15 @@ class BlindGrabMission:
         self._latest_frame: DetectionCount | None = None
         self._confirm_started_at = 0.0
         self._confirmation_frames = 0
+
+    def force_permanent(self, now: float) -> None:
+        """锁定永久盲抓；已经在抓取时只改变批后去向。"""
+
+        if self.permanent:
+            return
+        self.permanent = True
+        if self.state is not BlindState.GRABBING:
+            self._begin_batch(now)
 
     def step(self, now: float, frame: DetectionCount | None = None) -> BlindGrabDecision:
         if self._last_tick is not None:

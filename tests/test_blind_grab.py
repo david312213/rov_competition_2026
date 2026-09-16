@@ -91,6 +91,32 @@ def test_deadline_wins_over_a_confirmation_at_the_same_tick():
     assert decision.permanent
 
 
+def test_forced_permanent_mode_starts_immediately_and_never_returns_to_search():
+    mission = BlindGrabMission(config(fallback_after_s=1000))
+    mission.step(0)
+    mission.force_permanent(0.5)
+    decision = mission.step(0.5, observe(1, 0.5, 100))
+    assert decision.permanent
+    assert decision.threshold == 0
+    assert decision.state is BlindState.GRABBING
+    assert decision.phase == "open"
+
+
+def test_forced_permanent_during_a_grab_does_not_restart_the_current_batch():
+    mission = confirmed_mission()
+    mission.force_permanent(1.2)
+    current = mission.step(1.2, observe(10, 1.2, 0))
+    assert current.permanent
+    assert current.batch_index == 1
+    assert current.grab_in_batch == 1
+    assert current.phase == "open"
+    for now in range(2, 20):
+        current = mission.step(float(now), observe(now + 10, float(now), 0))
+    assert current.completed_batches == 1
+    assert current.batch_index == 2
+    assert current.phase == "open"
+
+
 def test_original_snake_route_alternates_shift_and_yaw_directions():
     mission = BlindGrabMission(config(fallback_after_s=1000))
     assert mission.step(0).motion.forward == .23
@@ -151,6 +177,16 @@ def test_each_batch_has_three_complete_sequences_and_correct_joint_poses():
     assert finished.grasp_command_count == 3
     assert finished.completed_cycles == 3
     assert finished.completed_batches == 1
+
+
+def test_configured_ten_grab_batch_completes_exactly_ten_cycles():
+    mission = confirmed_mission(grabs_per_batch=10)
+    for now in range(2, 62):
+        decision = mission.step(float(now), observe(now + 100, float(now), 0))
+    assert decision.state is BlindState.SEARCHING
+    assert decision.grasp_command_count == 10
+    assert decision.completed_cycles == 10
+    assert decision.completed_batches == 1
 
 
 def test_a_batch_longer_than_30_seconds_does_not_consume_search_time():

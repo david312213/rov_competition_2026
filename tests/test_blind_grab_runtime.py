@@ -69,6 +69,34 @@ def test_detection_buffer_counts_only_selected_labels_at_the_synced_confidence()
     assert buffer.accept(message(11, []), 1.0)
     assert buffer.latest().count == 0
     assert buffer.latest().frame_id == 2
+    assert not buffer.stream_lost(1.999, 1.0)
+    assert buffer.stream_lost(2.0, 1.0)
+
+
+def test_detection_stream_loss_immediately_latches_permanent_blind_grab():
+    buffer = DetectionBuffer(VisionSettings())
+    assert buffer.accept(message(1, []), 0.0)
+    stop = VirtualStop(end=1.1)
+    mission = BlindGrabMission(config(fallback_after_s=1000))
+    run_control_loop(mission, buffer, CaptureOutput(), stop,
+                     clock=lambda: stop.now, report=lambda s: None)
+    assert mission.permanent
+    assert mission.state is BlindState.GRABBING
+    assert mission.batch_index == 1
+
+
+def test_detection_source_exception_latches_without_waiting_for_fallback_timer():
+    class FailedSource:
+        def latest(self):
+            raise RuntimeError("detection transport disconnected")
+
+    stop = VirtualStop(end=.1)
+    mission = BlindGrabMission(config(fallback_after_s=1000))
+    run_control_loop(mission, FailedSource(), CaptureOutput(), stop,
+                     clock=lambda: stop.now, report=lambda s: None)
+    assert mission.permanent
+    assert mission.state is BlindState.GRABBING
+    assert mission.batch_index == 1
 
 
 @pytest.mark.parametrize("source_fails,output_fails", [(False, False), (True, False), (False, True), (True, True)])

@@ -63,6 +63,12 @@ class DetectionBuffer:
         with self._lock:
             return self._latest
 
+    def stream_lost(self, now: float, timeout_s: float) -> bool:
+        """第一帧到达后，判断检测流是否停止产生新图。"""
+
+        with self._lock:
+            return self._latest is not None and now - self._latest.received_at >= timeout_s
+
 
 class RosDetectionWorker:
     def __init__(self, buffer: DetectionBuffer, stop_event: threading.Event, report=say) -> None:
@@ -181,13 +187,34 @@ def run_control_loop(
     previous_key = None
     while not stop_event.is_set():
         now = clock()
+        source_failed = False
         try:
             frame = source.latest()
         except Exception as exc:
             frame = None
+            source_failed = True
             if now >= next_error_report_at:
-                report(f"[盲抓检测] {exc}；按未收到新帧继续")
+                report(f"[盲抓检测] {exc}；立即锁定永久盲抓")
                 next_error_report_at = now + 2.0
+        stream_lost = False
+        if not source_failed:
+            try:
+                stream_lost = source.stream_lost(now, mission.config.missing_frame_timeout_s)
+            except AttributeError:
+                # 测试或外部检测源可以只提供 latest()；仍保留30秒降级。
+                pass
+            except Exception as exc:
+                stream_lost = True
+                if now >= next_error_report_at:
+                    report(f"[盲抓检测] 无法检查检测流: {exc}；立即锁定永久盲抓")
+                    next_error_report_at = now + 2.0
+        if (source_failed or stream_lost) and not mission.permanent:
+            if stream_lost:
+                report(
+                    f"[盲抓检测] 连续{mission.config.missing_frame_timeout_s:g}秒没有新检测帧；"
+                    "立即锁定永久盲抓"
+                )
+            mission.force_permanent(now)
         decision = mission.step(now, frame)
         if stop_event.is_set():
             break
@@ -212,7 +239,9 @@ def run_control_loop(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="启动即执行的持续盲抓；4框确认，找框30秒后永久盲抓，Ctrl+C关闭。")
+    parser = argparse.ArgumentParser(
+        description="启动即执行的持续盲抓；4框确认，找框30秒或检测中途断流后永久盲抓，Ctrl+C关闭。"
+    )
     parser.add_argument("--config", default=str(package_config_path("blind_grab.yaml")), help="已填写的盲抓参数文件")
     parser.add_argument("--no-helpers", action="store_true", help="不启动视频/YOLO/录像/查看器；仍接收已有 /rov/detections")
     parser.add_argument("--output-dir", default="output/blind_grab_sessions", help="辅助进程日志和可选录像的目录")

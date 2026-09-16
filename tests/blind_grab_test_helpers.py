@@ -15,6 +15,7 @@ def config(**changes):
         arm_to_basket=ServoAction((ServoSetpoint(21, 1800),), 1.0),
         arm_to_grasp=ServoAction((ServoSetpoint(21, 1200),), 1.0),
         release_duration_s=1.0,
+        grabs_per_batch=3,
     )
     return replace(base, **changes)
 
@@ -37,7 +38,7 @@ def config_document():
                     "confirmation_duration_s": 1.0, "missing_frame_timeout_s": 1.0,
                     "fallback_after_s": 30.0},
         "search": {"lane_forward_duration_s": 20.0},
-        "grab": {"advance_duration_s": 1.0, "release_duration_s": 1.0, "grabs_per_batch": 3},
+        "grab": {"advance_duration_s": 1.0, "release_duration_s": 1.0, "grabs_per_batch": 10},
         "actions": {
             name: {"duration_s": 1.0, "outputs": [{"output_channel": channel, "pwm": pwm}]}
             for name, channel, pwm in [

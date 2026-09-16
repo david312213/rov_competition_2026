@@ -149,7 +149,7 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
         confirmation_duration_s=number(trigger.get("confirmation_duration_s", 1.0), "trigger.confirmation_duration_s"),
         missing_frame_timeout_s=number(trigger.get("missing_frame_timeout_s", 1.0), "trigger.missing_frame_timeout_s"),
         fallback_after_s=number(trigger.get("fallback_after_s", 30.0), "trigger.fallback_after_s"),
-        grabs_per_batch=integer(grasp.get("grabs_per_batch", 3), "grab.grabs_per_batch"),
+        grabs_per_batch=integer(grasp.get("grabs_per_batch", 10), "grab.grabs_per_batch"),
     )
     # 同时保持夹爪和机械臂姿态时不能给同一输出发送互相覆盖的两种 PWM。
     for claw in (mission.open_gripper, mission.close_gripper):
