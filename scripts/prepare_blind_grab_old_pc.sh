@@ -9,7 +9,8 @@ LOCAL_CONFIG="${PROJECT_DIR}/config/blind_grab.local.yaml"
 cd "${PROJECT_DIR}"
 chmod +x scripts/install.sh scripts/check.sh scripts/check_ros.sh \
   scripts/check_official_ros.sh scripts/start_blind_grab.sh \
-  scripts/test_arm_gripper.sh scripts/prepare_blind_grab_old_pc.sh
+  scripts/test_arm_gripper.sh scripts/tune_arm_gripper_pwm.sh \
+  scripts/prepare_blind_grab_old_pc.sh
 mkdir -p config
 if [[ ! -r "${LOCAL_CONFIG}" ]]; then
   cp "${TEMPLATE}" "${LOCAL_CONFIG}"
