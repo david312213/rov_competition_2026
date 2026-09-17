@@ -56,7 +56,7 @@ if ! grep -q " topic_forwarding$" <<<"${OFFICIAL_EXECUTABLES}"; then
   exit 1
 fi
 
-for REQUIRED_SCRIPT in start_blind_grab.sh check_official_ros.sh prepare_blind_grab_old_pc.sh; do
+for REQUIRED_SCRIPT in start_blind_grab.sh start_blind_grab_team1.sh start_blind_grab_team2.sh set_official_team.sh check_official_ros.sh prepare_blind_grab_old_pc.sh; do
   if [[ ! -x "${PROJECT_DIR}/scripts/${REQUIRED_SCRIPT}" ]]; then
     echo "缺少持续盲抓/官方ROS脚本: ${REQUIRED_SCRIPT}" >&2
     exit 1

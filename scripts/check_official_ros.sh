@@ -51,10 +51,19 @@ if ! ros2 pkg executables ros2_topic_forwarding | grep -q ' topic_forwarding$'; 
 fi
 python -m rov_competition.blind_grab_runtime --config "${CONFIG}" --dry-run >/dev/null
 
+case "${SERVER_PORT}" in
+  40198) TEAM_LABEL="一队" ;;
+  40197) TEAM_LABEL="二队（ddhyzx2）" ;;
+  *) TEAM_LABEL="自定义端口" ;;
+esac
+VIDEO_URL="rtmp://${SERVER_IP}/ros/${SERVER_PORT}"
+
 echo "官方ROS离线检查通过："
+echo "  队伍：${TEAM_LABEL}"
 echo "  消息：ros2_topic_forwarding/msg/RobotDataMessage"
 echo "  节点：ros2_topic_forwarding topic_forwarding"
-echo "  平台：${SERVER_IP}:${SERVER_PORT}"
+echo "  数据：${SERVER_IP}:${SERVER_PORT}"
+echo "  视频：${VIDEO_URL}"
 
 if [[ "${MODE}" == "--offline" ]]; then
   echo "正式启动后，另开终端运行：./scripts/check_official_ros.sh --live"
@@ -77,6 +86,14 @@ for topic in /cmd_vel /cmd_accel /robot_data; do
     exit 1
   fi
   echo "  OK：${topic} 正在发布"
+done
+
+for topic in /imu /magnetometer /pressure /joy; do
+  if timeout 2 ros2 topic echo "${topic}" --once >/dev/null 2>&1; then
+    echo "  OK：${topic} 收到真实数据"
+  else
+    echo "  INFO：${topic} 当前无数据；对应真实遥测/手柄出现后才发布"
+  fi
 done
 
 if command -v ss >/dev/null 2>&1; then

@@ -75,7 +75,8 @@ mavlink:
 official_ros:
   enabled: true
   server_ip: "api.bjetone.com"
-  server_port: 40184
+  # 一队40198；二队ddhyzx2为40197。模板默认二队，正式使用队伍启动脚本覆盖。
+  server_port: 40197
   command_rate_hz: 20.0
   robot_data_rate_hz: 5.0
   telemetry_stale_s: 5.0

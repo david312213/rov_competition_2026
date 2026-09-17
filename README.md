@@ -1,7 +1,7 @@
 # ROV 比赛工作空间
 
 新增独立入口：[持续盲抓兜底](docs/持续盲抓README.md)。
-启动 `bash scripts/start_blind_grab.sh`：立即下潜，首次压力深度稳定3秒或10秒兜底后抓取；随后永久执行“抓取投放→上潜2秒→四段蛇形前进→定时下潜”。
+一队使用 `./scripts/start_blind_grab_team1.sh`（官方端口40198），二队 `ddhyzx2` 使用 `./scripts/start_blind_grab_team2.sh`（官方端口40197）。启动后立即下潜，首次压力深度稳定3秒或10秒兜底后抓取；随后永久执行“抓取投放→上潜2秒→四段蛇形前进→定时下潜”。
 视觉继续显示识别框，但框数完全不参与运动；模板已写入本艇臂爪PWM、升沉和蛇形时间，由操作员提前设置模式并解锁，手动关闭结束。
 单独检查臂爪可运行 `./scripts/test_arm_gripper.sh`，按 `a/b/c/d` 分别执行张爪、闭爪、机械臂后仰和恢复。
 需要手动试PWM时运行 `./scripts/tune_arm_gripper_pwm.sh`，先选 `a/b/c/d`，再输入PWM数字。

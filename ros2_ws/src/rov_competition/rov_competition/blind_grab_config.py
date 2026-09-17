@@ -46,7 +46,7 @@ class VisionSettings:
 class OfficialRosSettings:
     enabled: bool = True
     server_ip: str = "api.bjetone.com"
-    server_port: int = 40184
+    server_port: int = 40197
     command_rate_hz: float = 20.0
     robot_data_rate_hz: float = 5.0
     telemetry_stale_s: float = 5.0
@@ -310,7 +310,7 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
         enabled=boolean(official_root.get("enabled", True), "official_ros.enabled"),
         server_ip=server_ip.strip(),
         server_port=integer(
-            official_root.get("server_port", 40184), "official_ros.server_port", 65535,
+            official_root.get("server_port", 40197), "official_ros.server_port", 65535,
         ),
         command_rate_hz=number(
             official_root.get("command_rate_hz", 20.0), "official_ros.command_rate_hz",

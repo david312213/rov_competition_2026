@@ -92,7 +92,10 @@ S10的1300只作为机械臂水平参考，自动流程不发送该值。当前P
 
 ```bash
 cd /home/persica/rov_competition_2026
-./scripts/start_blind_grab.sh
+# 一队，数据端口40198：
+./scripts/start_blind_grab_team1.sh
+# 二队ddhyzx2，数据端口40197：
+./scripts/start_blind_grab_team2.sh
 ```
 
 本入口不会自动切换模式或解锁。启动后不等待ROS、视频、模型、录像、查看器、官方服务器或MAVLink连接，状态机立即开始首次下潜计时。
@@ -109,6 +112,8 @@ cd /home/persica/rov_competition_2026
 ./scripts/start_blind_grab.sh --no-helpers
 ```
 
+使用 `--no-helpers` 也会关闭本入口管理的官方RTMP视频；此时需要由外部视频进程自行推流。
+
 人工关闭使用 `Ctrl+C`。SIGTERM和终端关闭产生的SIGHUP也会结束循环，尝试发送三帧运动归中并释放控制。
 
 ## 4. 视觉与通信
@@ -117,15 +122,16 @@ cd /home/persica/rov_competition_2026
 
 ```text
 艇端 → QGC 5600
-艇端 → 软件 5700 → YOLO 5702 → /rov/detections
-                      └→ 可选录像 5704
+艇端 → 软件 5700 ┬→ YOLO 5702 → /rov/detections和本机带框画面
+                 ├→ 可选录像 5704
+                 └→ 官方RTMP（队伍端口40198或40197）
 ```
 
 `/rov/detections` 只用于终端显示框数和带框查看器。检测到0框、很多框、重复帧、断流或解析异常产生相同的运动序列。
 
 视频分发、YOLO、查看器和可选录像由独立线程管理，启动失败或退出后持续重试。MAVLink发送失败时状态时钟继续，通信线程持续重连；恢复连接后发送当时状态的运动和舵机目标。
 
-比赛官方ROS数据链继续独立运行：20 Hz发布 `/cmd_vel`、`/cmd_accel`，5 Hz发布 `/robot_data`，并转发 `/imu`、`/magnetometer`、`/pressure`。官方ROS或TCP进程失败只触发重试，不改变盲抓状态。
+比赛官方数据链继续独立运行：20 Hz发布 `/cmd_vel`、`/cmd_accel`，5 Hz发布 `/robot_data`，有真实新鲜遥测时发布 `/imu`、`/magnetometer`、`/pressure`；本程序不伪造 `/joy`。视频分流同时把5700端口的原始H.264画面推到所选队伍的RTMP地址，本机查看器仍显示带框画面。官方ROS、TCP或RTMP失败只触发重试，不改变盲抓状态。
 
 终端日志示例字段：
 

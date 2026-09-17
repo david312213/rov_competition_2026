@@ -319,7 +319,14 @@ def main(argv: list[str] | None = None) -> int:
         report=say,
     )
     output = DesiredOutputFanout(mavlink_output, official, report=say)
-    helpers = OptionalHelpers(config.vision, directory, stop_event, report=say)
+    official_rtmp_url = (
+        f"rtmp://{config.official_ros.server_ip}/ros/{config.official_ros.server_port}"
+        if config.official_ros.enabled else None
+    )
+    helpers = OptionalHelpers(
+        config.vision, directory, stop_event,
+        official_rtmp_url=official_rtmp_url, report=say,
+    )
     say("开始永久沉底蛇形盲抓：立即下潜；不自动设置模式或解锁。Ctrl+C或SIGTERM关闭。")
     say(f"配置: {config.source_path}；辅助日志: {directory}")
     if config.official_ros.enabled:
@@ -327,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
             f"官方ROS数据默认开启：{config.official_ros.server_ip}:"
             f"{config.official_ros.server_port}；失败只重试，不停止抓取"
         )
+        say(f"官方ROS视频推流：{official_rtmp_url}；失败不停止抓取")
     else:
         say("官方ROS数据已由命令行关闭，仅适用于离线诊断")
     try:

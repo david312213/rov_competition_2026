@@ -41,7 +41,7 @@ def test_vehicle_template_contains_permanent_dive_route_and_action_timing():
     assert mission.arm_to_grasp.duration_s == 2
     assert config.official_ros.enabled
     assert (config.official_ros.server_ip, config.official_ros.server_port) == (
-        "api.bjetone.com", 40184,
+        "api.bjetone.com", 40197,
     )
 
 
@@ -152,7 +152,10 @@ def test_perception_threshold_model_and_restartable_viewer_are_prepared(tmp_path
     }
     source.write_text(yaml.safe_dump(original))
     settings = VisionSettings(autonomy_config=source, record_video=True)
-    processes = prepare_helper_processes(settings, tmp_path / "session")
+    processes = prepare_helper_processes(
+        settings, tmp_path / "session",
+        "rtmp://api.bjetone.com/ros/40197",
+    )
     resolved = yaml.safe_load((tmp_path / "session/perception_autonomy.yaml").read_text())
     assert resolved["detector"]["confidence_threshold"] == .18
     assert resolved["detector"]["model_path"] == str((tmp_path / "models/custom.pt").resolve())
@@ -164,6 +167,9 @@ def test_perception_threshold_model_and_restartable_viewer_are_prepared(tmp_path
     assert all(process.restart for process in processes)
     commands = {process.name: process.command(1) for process in processes}
     assert "--no-qgc" in commands["video_bridge"]
+    assert commands["video_bridge"][-2:] == [
+        "--rtmp", "rtmp://api.bjetone.com/ros/40197",
+    ]
     assert "perception_only.launch.py" in commands["perception"]
     assert not any(
         "rov_vehicle" in argument

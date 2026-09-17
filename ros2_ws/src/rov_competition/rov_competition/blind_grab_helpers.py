@@ -27,8 +27,12 @@ class HelperProcess:
     finished: bool = False
 
 
-def prepare_helper_processes(settings: VisionSettings, directory: Path) -> list[HelperProcess]:
-    """制作本次感知配置；仅调整计数相关阈值，模型路径保持指向原权重。"""
+def prepare_helper_processes(
+    settings: VisionSettings,
+    directory: Path,
+    official_rtmp_url: str | None = None,
+) -> list[HelperProcess]:
+    """制作感知、视频分流和可选官方RTMP进程配置。"""
     import yaml
 
     directory.mkdir(parents=True, exist_ok=True)
@@ -55,6 +59,8 @@ def prepare_helper_processes(settings: VisionSettings, directory: Path) -> list[
         "--record-host", "127.0.0.1", "--record-port", str(settings.record_port),
         "--no-display",
     ]
+    if official_rtmp_url:
+        bridge.extend(["--rtmp", official_rtmp_url])
     perception = [
         "ros2", "launch", "rov_competition", "perception_only.launch.py",
         f"robot_config:={robot}", f"autonomy_config:={autonomy_path}",
@@ -83,12 +89,14 @@ class OptionalHelpers:
 
     def __init__(
         self, settings: VisionSettings, directory: Path, stop_event: threading.Event,
-        *, popen: Callable[..., Any] = subprocess.Popen,
+        *, official_rtmp_url: str | None = None,
+        popen: Callable[..., Any] = subprocess.Popen,
         report: Callable[[str], None] = print,
     ) -> None:
         self.settings = settings
         self.directory = directory
         self.stop_event = stop_event
+        self.official_rtmp_url = official_rtmp_url
         self._popen = popen
         self._report = report
         self.processes: list[HelperProcess] = []
@@ -148,7 +156,9 @@ class OptionalHelpers:
             while not self.stop_event.is_set():
                 if not self.processes:
                     try:
-                        self.processes = prepare_helper_processes(self.settings, self.directory)
+                        self.processes = prepare_helper_processes(
+                            self.settings, self.directory, self.official_rtmp_url,
+                        )
                     except Exception as exc:
                         self._say(f"感知配置暂不可用: {type(exc).__name__}: {exc}")
                         self.stop_event.wait(5.0)
