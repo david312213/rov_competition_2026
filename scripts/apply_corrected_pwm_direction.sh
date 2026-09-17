@@ -50,10 +50,10 @@ if not isinstance(document, dict) or not isinstance(document.get("actions"), dic
     raise SystemExit("配置缺少 actions 段，未修改")
 
 corrected = {
-    "open_gripper": 1200,
-    "close_gripper": 570,
+    "open_gripper": 730,
+    "close_gripper": 575,
     "arm_to_basket": 1810,
-    "arm_to_grasp": 700,
+    "arm_to_grasp": 710,
 }
 for action_name, pwm in corrected.items():
     action = document["actions"].get(action_name)
@@ -82,6 +82,6 @@ finally:
 
 print(f"已备份：{backup}")
 print(f"已修正：{path}")
-print("  张爪 S11=1200，闭爪 S11=570")
-print("  机械臂后仰 S10=1810，机械臂恢复 S10=700")
+print("  张爪 S11=730，闭爪 S11=575")
+print("  机械臂后仰 S10=1810，机械臂垂直向下 S10=710（1300为水平参考）")
 PY
