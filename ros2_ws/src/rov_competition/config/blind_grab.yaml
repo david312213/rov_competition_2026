@@ -32,27 +32,27 @@ actions:
   # output_channel 是飞控绝对 SERVO 编号，不会自动加 8。
   # 一次动作需要多路舵机时，在 outputs 中追加条目。
   # 2026-09-17 实艇复核：QGC servo_3（按钮9/10）是夹爪，对应 S11；
-  # QGC servo_2（按钮14/15）是机械臂，对应 S10；两组PWM动作方向与初稿相反。
+  # QGC servo_2（按钮14/15）是机械臂，对应 S10；以下为实测端点。
   open_gripper:
     duration_s: 0.5
     outputs:
       - output_channel: 11
-        pwm: 1800
+        pwm: 1200
   close_gripper:
     duration_s: 0.5
     outputs:
       - output_channel: 11
-        pwm: 900
+        pwm: 570
   arm_to_basket:
     duration_s: 1.8
     outputs:
       - output_channel: 10
-        pwm: 1800
+        pwm: 1810
   arm_to_grasp:
     duration_s: 2.0
     outputs:
       - output_channel: 10
-        pwm: 900
+        pwm: 700
 
 mavlink:
   connection_uri: "udpin:0.0.0.0:14551"

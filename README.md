@@ -5,7 +5,7 @@
 模板已写入本艇臂爪PWM和动作时间；本入口启动即运行，由操作员提前就位、设置模式和解锁，手动关闭结束。
 单独检查臂爪可运行 `./scripts/test_arm_gripper.sh`，按 `a/b/c/d` 分别执行张爪、闭爪、机械臂后仰和恢复。
 需要手动试PWM时运行 `./scripts/tune_arm_gripper_pwm.sh`，先选 `a/b/c/d`，再输入PWM数字。
-PWM动作方向已按实艇复核翻转；旧电脑拉取后运行 `./scripts/apply_corrected_pwm_direction.sh` 同步本机配置。
+PWM端点已按实艇标定更新为夹爪570/1200、机械臂700/1810；旧电脑拉取后运行 `./scripts/apply_corrected_pwm_direction.sh` 同步本机配置。
 比赛方 `ros2_topic_forwarding` 已纳入同一工作空间并由该入口自动启动；旧电脑首次更新、一键启动和计分链路检查见[官方ROS转发与旧电脑启动](docs/官方ROS转发与旧电脑启动.md)。
 
 以下为原有任务入口及其说明。
