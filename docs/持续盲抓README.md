@@ -22,10 +22,10 @@ cp ros2_ws/src/rov_competition/config/blind_grab.yaml config/blind_grab.local.ya
 | `search.lane_forward_duration_s` | 每条蛇形搜索带前进20秒 |
 | `grab.advance_duration_s` | 每次开爪后，以0.23向前抓取1秒 |
 | `grab.release_duration_s` | 在筐上方开爪投放并保持2秒 |
-| `actions.open_gripper` | S11发送900，等待0.5秒 |
-| `actions.close_gripper` | S11发送1800，等待0.5秒 |
-| `actions.arm_to_basket` | S10发送900，等待1.8秒 |
-| `actions.arm_to_grasp` | S10发送1800，等待2秒 |
+| `actions.open_gripper` | S11发送1800，等待0.5秒 |
+| `actions.close_gripper` | S11发送900，等待0.5秒 |
+| `actions.arm_to_basket` | S10发送1800，等待1.8秒 |
+| `actions.arm_to_grasp` | S10发送900，等待2秒 |
 | `official_ros.server_port` | 官方包提供的平台TCP端口40184 |
 
 每个动作的 `outputs` 可以填写多路舵机。`output_channel` 是飞控的**绝对 SERVO 输出号**，不会自动加8。夹爪和机械臂使用各自的通道；开/闭爪通常使用同一组夹爪通道，转筐/回位通常使用同一组机械臂通道。
@@ -34,12 +34,14 @@ cp ros2_ws/src/rov_competition/config/blind_grab.yaml config/blind_grab.local.ya
 
 | 动作 | QGC映射 | 飞控输出 | PWM |
 |---|---|---:|---:|
-| 开爪 | `servo_3`（按钮9/10） | S11/AUX3 | 900 |
-| 闭爪 | `servo_3`（按钮9/10） | S11/AUX3 | 1800 |
-| 机械臂到筐位/收回 | `servo_2`（按钮14/15） | S10/AUX2 | 900 |
-| 机械臂到抓取位/下放 | `servo_2`（按钮14/15） | S10/AUX2 | 1800 |
+| 开爪 | `servo_3`（按钮9/10） | S11/AUX3 | 1800 |
+| 闭爪 | `servo_3`（按钮9/10） | S11/AUX3 | 900 |
+| 机械臂到筐位/收回 | `servo_2`（按钮14/15） | S10/AUX2 | 1800 |
+| 机械臂到抓取位/下放 | `servo_2`（按钮14/15） | S10/AUX2 | 900 |
 
-机械臂最小值按现场要求取900。盲抓入口直接发送上述固定PWM，不依赖QGC按钮保持时间。每次完整抓取约7.8秒，每批10次约78秒。
+2026-09-17 实艇复核确认通道不变、两组动作方向与初稿相反。机械臂最小值按现场要求取900。盲抓入口直接发送上述固定PWM，不依赖QGC按钮保持时间。每次完整抓取约7.8秒，每批10次约78秒。
+
+旧电脑已存在本地配置时，拉取更新后运行 `./scripts/apply_corrected_pwm_direction.sh`，脚本会先备份再只修正四个动作PWM。
 
 默认使用 `MANUAL_CONTROL`，前进0.23、横移0.20、转艇0.20。各轴符号在 `mavlink.directions` 中填写；没有旧网关的额外统一限幅或斜率限制。接口取值为归一化的 `[-1, 1]`。
 

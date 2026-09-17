@@ -20,6 +20,7 @@ config/dataset.yaml
 config/dataset.yaml.*
 ros2_ws/src/rov_competition/config/robot.yaml
 *.local.yaml
+config/blind_grab.local.yaml.*
 
 # 训练权重超过 GitHub 普通文件上限，保留在各机器本地
 ros2_ws/src/rov_competition/models/*.pt
