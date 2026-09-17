@@ -1,28 +1,34 @@
-# 持续盲抓入口的唯一参数模板。
+# 永久沉底蛇形盲抓入口的参数模板。
 # 当前已写入2026-09-17实艇标定的臂爪通道、PWM和动作时间。
 # 复制到根目录 config/blind_grab.local.yaml 后可按现场距离微调时间。
-# 启动前由操作员完成作业高度、飞控模式与解锁；启动即开始搜索。
+# 启动前由操作员设置飞控模式并解锁；启动后立即下潜。
 
-trigger:
-  required_boxes: 4
-  confirmation_frames: 5
-  confirmation_duration_s: 1.0
-  # 检测流曾经正常出帧后，连续这么久没有新帧就立即锁定永久盲抓。
-  missing_frame_timeout_s: 1.0
-  # 只统计搜索和停车确认时间；到时 4 直接变成 0。
-  fallback_after_s: 30.0
+vertical:
+  # 首次启动：持续下潜，压力深度稳定3秒即判底；10秒仍未确认也直接抓取。
+  initial_descent_command: -0.415
+  initial_bottom_stable_s: 3.0
+  initial_bottom_tolerance_m: 0.05
+  initial_minimum_descent_m: 0.10
+  initial_fallback_s: 10.0
+  # 每次投放后固定上潜2秒，再沿蛇形移动。
+  ascent_command: 0.415
+  ascent_duration_s: 2.0
+  # 除第一次外，每次移动结束后固定下潜5秒。
+  repeat_descent_command: -0.415
+  repeat_descent_duration_s: 5.0
 
-search:
-  # 原蛇形入口每次询问的“每带前进秒数”；目前先按20秒执行。
-  lane_forward_duration_s: 20.0
+route:
+  # 每带四段，每段前进5秒，总计20秒。
   forward_command: 0.23
+  step_duration_s: 5.0
+  steps_per_lane: 4
+  # 第四段后先横移再转艇，左右方向逐带交替。
   shift_command: 0.20
   shift_duration_s: 4.5
   turn_command: 0.20
   turn_duration_s: 11.5
 
 grab:
-  grabs_per_batch: 10
   forward_command: 0.23
   advance_duration_s: 1.0
   # 转到筐上方后开爪，保持这么久再让机械臂回位。
@@ -30,7 +36,6 @@ grab:
 
 actions:
   # output_channel 是飞控绝对 SERVO 编号，不会自动加 8。
-  # 一次动作需要多路舵机时，在 outputs 中追加条目。
   # 2026-09-17 实艇复核：QGC servo_3（按钮9/10）是夹爪，对应 S11；
   # QGC servo_2（按钮14/15）是机械臂，对应 S10；S10=1300为水平参考。
   open_gripper:
@@ -59,7 +64,6 @@ mavlink:
   baud: 115200
   source_system: 255
   source_component: 191
-  # 如果实艇地址不是 1/1，填写实艇的 MAVLink system/component ID。
   target_system: 1
   target_component: 1
   directions:
@@ -69,16 +73,14 @@ mavlink:
     yaw: 1
 
 official_ros:
-  # 默认启动官方 ros2_topic_forwarding，并独立重启；转发失败不停止盲抓。
   enabled: true
   server_ip: "api.bjetone.com"
-  # 来自本次官方包 forwarding.yaml。若平台重新分配端口，只改本地配置。
   server_port: 40184
   command_rate_hz: 20.0
   robot_data_rate_hz: 5.0
   telemetry_stale_s: 5.0
   forwarder_restart_s: 2.0
-  # 与现有实艇遥测定义一致：AHRS2.altitude 取负数作为深度（米）。
+  # 首次沉底判定和官方数据显示共用同一份真实MAVLink深度。
   depth:
     message: "AHRS2"
     field: "altitude"
@@ -87,15 +89,13 @@ official_ros:
 
 vision:
   target_labels: ["scallop"]
-  # 本值也写入本次独立感知配置，避免上游仍用 0.45 先过滤目标。
   confidence: 0.18
-  # 已经另行启动了视频分发和感知时设 false，仍订阅 /rov/detections。
+  # 感知仅绘制和显示框；检测结果永远不参与运动状态转换。
   start_helpers: true
   show_viewer: true
   record_video: false
   source_port: 5700
   inference_port: 5702
   record_port: 5704
-  # 这两个 null 表示使用本包同名配置；也可填实艇配置的绝对路径。
   robot_config: null
   autonomy_config: null

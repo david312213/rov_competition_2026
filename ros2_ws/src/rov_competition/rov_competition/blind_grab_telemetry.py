@@ -42,7 +42,7 @@ class BlindTelemetrySnapshot:
 
 
 class BlindTelemetryCollector:
-    """解析常见 ArduSub MAVLink 消息，不参与任何运动许可或状态跳转。"""
+    """解析常见ArduSub消息；深度只供首次判底，其余字段供官方展示。"""
 
     def __init__(
         self,

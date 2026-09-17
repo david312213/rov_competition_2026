@@ -1,21 +1,20 @@
 import os
-from pathlib import Path
 import signal
 import socket
 import subprocess
 import sys
-import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
-
 from blind_grab_test_helpers import config, config_document
-from rov_competition.blind_grab import BlindGrabMission, BlindState
+from rov_competition.blind_grab import BlindGrabMission, BlindState, DetectionCount
 from rov_competition.blind_grab_config import VisionSettings
 from rov_competition.blind_grab_helpers import HelperProcess, OptionalHelpers
 from rov_competition.blind_grab_runtime import DetectionBuffer, run_control_loop
+from rov_competition.blind_grab_telemetry import BlindTelemetrySnapshot
 
 
 class VirtualStop:
@@ -53,95 +52,213 @@ class CaptureOutput:
 def message(stamp, labels_and_scores):
     return SimpleNamespace(
         stamp=SimpleNamespace(sec=stamp, nanosec=0),
-        detections=[SimpleNamespace(label=label, confidence=confidence) for label, confidence in labels_and_scores],
+        detections=[
+            SimpleNamespace(label=label, confidence=confidence)
+            for label, confidence in labels_and_scores
+        ],
     )
 
 
-def test_detection_buffer_counts_only_selected_labels_at_the_synced_confidence():
+def no_depth():
+    return BlindTelemetrySnapshot()
+
+
+def fast_config(**changes):
+    from dataclasses import replace
+
+    c = config(
+        initial_fallback_s=.15,
+        ascent_duration_s=.10,
+        route_step_duration_s=.10,
+        repeat_descent_duration_s=.10,
+        shift_duration_s=.10,
+        turn_duration_s=.10,
+        advance_duration_s=.10,
+        release_duration_s=.10,
+    )
+    c = replace(
+        c,
+        **{
+            name: replace(getattr(c, name), duration_s=.10)
+            for name in (
+                "open_gripper", "close_gripper", "arm_to_basket", "arm_to_grasp",
+            )
+        },
+    )
+    return replace(c, **changes)
+
+
+def test_detection_buffer_counts_boxes_for_display_only():
     buffer = DetectionBuffer(VisionSettings())
-    assert buffer.accept(message(10, [("scallop", .18)] * 4 + [("scallop", .17), ("waterweeds", .99)]), 0)
+    assert buffer.accept(
+        message(10, [("scallop", .18)] * 4 + [("scallop", .17), ("waterweeds", .99)]),
+        0,
+    )
     assert buffer.latest().count == 4
     assert buffer.latest().frame_id == 1
     assert not buffer.accept(message(10, [("scallop", .99)] * 9), .5)
     assert not buffer.accept(message(9, []), .6)
     assert buffer.latest().received_at == 0
-    assert buffer.latest().count == 4
     assert buffer.accept(message(11, []), 1.0)
     assert buffer.latest().count == 0
     assert buffer.latest().frame_id == 2
-    assert not buffer.stream_lost(1.999, 1.0)
-    assert buffer.stream_lost(2.0, 1.0)
 
 
-def test_detection_stream_loss_immediately_latches_permanent_blind_grab():
-    buffer = DetectionBuffer(VisionSettings())
-    assert buffer.accept(message(1, []), 0.0)
-    stop = VirtualStop(end=1.1)
-    mission = BlindGrabMission(config(fallback_after_s=1000))
-    run_control_loop(mission, buffer, CaptureOutput(), stop,
-                     clock=lambda: stop.now, report=lambda s: None)
-    assert mission.permanent
-    assert mission.state is BlindState.GRABBING
-    assert mission.batch_index == 1
-
-
-def test_detection_source_exception_latches_without_waiting_for_fallback_timer():
+def test_detection_exception_does_not_skip_initial_descent_or_change_motion():
     class FailedSource:
         def latest(self):
             raise RuntimeError("detection transport disconnected")
 
-    stop = VirtualStop(end=.1)
-    mission = BlindGrabMission(config(fallback_after_s=1000))
-    run_control_loop(mission, FailedSource(), CaptureOutput(), stop,
-                     clock=lambda: stop.now, report=lambda s: None)
-    assert mission.permanent
+    stop = VirtualStop(end=.10)
+    mission = BlindGrabMission(config(initial_fallback_s=10.0))
+    output = CaptureOutput()
+    run_control_loop(
+        mission,
+        FailedSource(),
+        no_depth,
+        output,
+        stop,
+        clock=lambda: stop.now,
+        report=lambda text: None,
+    )
+    assert mission.state is BlindState.INITIAL_DESCENT
+    assert output.commands
+    assert all(command.vertical == pytest.approx(-.415) for command, _ in output.commands)
+
+
+def test_many_boxes_and_no_boxes_produce_identical_command_timeline():
+    outputs = []
+    for visible_count in (0, 100):
+        stop = VirtualStop(end=3.0)
+
+        class DetectionSource:
+            def __init__(self, timer, count):
+                self.timer = timer
+                self.count = count
+
+            def latest(self):
+                return DetectionCount(
+                    frame_id=round(self.timer.now * 20),
+                    received_at=self.timer.now,
+                    count=self.count,
+                )
+
+        output = CaptureOutput()
+        run_control_loop(
+            BlindGrabMission(fast_config()),
+            DetectionSource(stop, visible_count),
+            no_depth,
+            output,
+            stop,
+            clock=lambda timer=stop: timer.now,
+            report=lambda text: None,
+        )
+        outputs.append(output.commands)
+    assert outputs[0] == outputs[1]
+
+
+def test_pressure_depth_can_confirm_first_bottom_inside_runtime():
+    stop = VirtualStop(end=3.25)
+
+    def depth_source():
+        value = 1.0 if stop.now == 0 else 1.20
+        return BlindTelemetrySnapshot(depth_m=value, depth_at=stop.now)
+
+    mission = BlindGrabMission(config(initial_fallback_s=10.0))
+    run_control_loop(
+        mission,
+        SimpleNamespace(latest=lambda: None),
+        depth_source,
+        CaptureOutput(),
+        stop,
+        clock=lambda: stop.now,
+        report=lambda text: None,
+    )
+    assert mission.bottom_source == "pressure"
     assert mission.state is BlindState.GRABBING
-    assert mission.batch_index == 1
 
 
-@pytest.mark.parametrize("source_fails,output_fails", [(False, False), (True, False), (False, True), (True, True)])
-def test_main_loop_keeps_running_and_falls_back_when_components_fail(source_fails, output_fails):
-    class Source:
+@pytest.mark.parametrize(
+    "detection_fails,depth_fails,output_fails",
+    [
+        (False, False, False),
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (True, True, True),
+    ],
+)
+def test_main_loop_keeps_timing_when_optional_sources_or_output_fail(
+    detection_fails, depth_fails, output_fails,
+):
+    class DetectionSource:
         def latest(self):
-            if source_fails:
+            if detection_fails:
                 raise RuntimeError("model/camera unavailable")
-            return None
-    stop = VirtualStop()
+
+    def depth_source():
+        if depth_fails:
+            raise RuntimeError("telemetry unavailable")
+        return BlindTelemetrySnapshot()
+
+    stop = VirtualStop(end=5.0)
     output = CaptureOutput(fail=output_fails)
-    mission = BlindGrabMission(config())
-    run_control_loop(mission, Source(), output, stop, clock=lambda: stop.now, report=lambda s: None)
-    assert mission.permanent
-    assert mission.state is BlindState.GRABBING
-    assert mission.grasp_command_count >= 2
-    assert len(output.commands) == 900
+    mission = BlindGrabMission(fast_config())
+    run_control_loop(
+        mission,
+        DetectionSource(),
+        depth_source,
+        output,
+        stop,
+        clock=lambda: stop.now,
+        report=lambda text: None,
+    )
+    assert mission.completed_cycles >= 4
+    assert mission.state in set(BlindState)
+    assert len(output.commands) == 100
 
 
 @pytest.mark.parametrize("failed_role", ["perception", "video_bridge", "recorder", "viewer"])
 @pytest.mark.parametrize("failure", ["startup", "exit"])
-def test_auxiliary_process_failure_never_stops_control(tmp_path, failed_role, failure):
+def test_auxiliary_process_failure_restarts_and_never_stops_control(
+    tmp_path, failed_role, failure,
+):
     class Process:
         def __init__(self, role):
             self.role = role
+
         def poll(self):
             return 1 if failure == "exit" and self.role == failed_role else None
+
     def popen(command, **kwargs):
         if failure == "startup" and command[0] == failed_role:
             raise OSError(f"{failed_role} failed to start")
         return Process(command[0])
+
     (tmp_path / "logs").mkdir()
-    stop = VirtualStop()
-    helpers = OptionalHelpers(VisionSettings(), tmp_path, stop, popen=popen, report=lambda s: None)
-    helpers.processes = [HelperProcess(role, lambda n, role=role: [role], restart=role != "viewer")
-                         for role in ["perception", "video_bridge", "recorder", "viewer"]]
+    stop = VirtualStop(end=12.0)
+    helpers = OptionalHelpers(
+        VisionSettings(), tmp_path, stop, popen=popen, report=lambda text: None,
+    )
+    helpers.processes = [
+        HelperProcess(role, lambda n, role=role: [role])
+        for role in ["perception", "video_bridge", "recorder", "viewer"]
+    ]
     stop.hook = helpers.tick
-    mission = BlindGrabMission(config())
+    mission = BlindGrabMission(fast_config())
     try:
-        run_control_loop(mission, SimpleNamespace(latest=lambda: None), CaptureOutput(), stop,
-                         clock=lambda: stop.now, report=lambda s: None)
-        assert mission.permanent
-        assert mission.grasp_command_count >= 2
-        failed = next(c for c in helpers.processes if c.name == failed_role)
-        assert failed.attempts >= (1 if failed_role == "viewer" else 2)
+        run_control_loop(
+            mission,
+            SimpleNamespace(latest=lambda: None),
+            no_depth,
+            CaptureOutput(),
+            stop,
+            clock=lambda: stop.now,
+            report=lambda text: None,
+        )
+        assert mission.completed_cycles > 5
+        failed = next(child for child in helpers.processes if child.name == failed_role)
+        assert failed.attempts >= 2
     finally:
         for child in helpers.processes:
             if child.log is not None:
@@ -165,22 +282,44 @@ def test_dry_run_does_not_load_ros_mavlink_or_start_helpers(tmp_path):
         f"assert main(['--config', {str(path)!r}, '--dry-run']) == 0; "
         "assert 'rclpy' not in sys.modules; assert 'pymavlink' not in sys.modules"
     )
-    result = subprocess.run([sys.executable, "-c", code], env=python_environment(), cwd=tmp_path,
-                            capture_output=True, text=True, timeout=10)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=python_environment(),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "output").exists()
 
 
-@pytest.mark.parametrize("stop_signal,wire_version", [(signal.SIGINT, "1"), (signal.SIGTERM, "2"), (signal.SIGHUP, "1")])
-def test_real_loopback_mavlink_and_process_signal_cleanup(tmp_path, stop_signal, wire_version):
+@pytest.mark.parametrize(
+    "stop_signal,wire_version",
+    [(signal.SIGINT, "1"), (signal.SIGTERM, "2"), (signal.SIGHUP, "1")],
+)
+def test_real_loopback_mavlink_and_process_signal_cleanup(
+    tmp_path, stop_signal, wire_version,
+):
     """只向测试自身的127.0.0.1临时UDP端口发送；从不连接实艇。"""
     pytest.importorskip("pymavlink")
     from pymavlink.dialects.v20 import ardupilotmega
+
     decoder = ardupilotmega.MAVLink(None)
     decoder.robust_parsing = True
     packets = []
     document = config_document()
-    document["trigger"]["fallback_after_s"] = .15  # 缩短仅此测试的虚拟现场时序。
+    document["vertical"].update(
+        initial_fallback_s=.15,
+        ascent_duration_s=.10,
+        repeat_descent_duration_s=.10,
+    )
+    document["route"].update(
+        step_duration_s=.10,
+        shift_duration_s=.10,
+        turn_duration_s=.10,
+    )
     document["grab"]["advance_duration_s"] = .10
     document["grab"]["release_duration_s"] = .10
     for action in document["actions"].values():
@@ -201,41 +340,65 @@ def test_real_loopback_mavlink_and_process_signal_cleanup(tmp_path, stop_signal,
     try:
         with log_path.open("wb") as log:
             process = subprocess.Popen(
-                [sys.executable, "-m", "rov_competition.blind_grab_runtime",
-                 "--config", str(path), "--no-helpers"],
-                env=env, cwd=tmp_path, stdout=log, stderr=subprocess.STDOUT,
+                [
+                    sys.executable,
+                    "-m",
+                    "rov_competition.blind_grab_runtime",
+                    "--config",
+                    str(path),
+                    "--no-helpers",
+                ],
+                env=env,
+                cwd=tmp_path,
+                stdout=log,
+                stderr=subprocess.STDOUT,
             )
             started = time.monotonic()
             while time.monotonic() - started < 8.0:
                 try:
                     data, _ = sock.recvfrom(65535)
                     packets.extend(decoder.parse_buffer(data) or [])
-                except socket.timeout:
+                except TimeoutError:
                     pass
-                has_grab = any(p.get_type() == "COMMAND_LONG" and p.param2 == 1900 for p in packets)
-                if has_grab and time.monotonic() - started >= 1.0:
+                has_close = any(
+                    packet.get_type() == "COMMAND_LONG" and packet.param2 == 1900
+                    for packet in packets
+                )
+                motion = [
+                    packet for packet in packets
+                    if packet.get_type() == "MANUAL_CONTROL"
+                ]
+                has_descent = any(packet.z < 500 for packet in motion)
+                has_forward = any(packet.x > 0 for packet in motion)
+                if has_close and has_descent and has_forward and time.monotonic() - started >= 1.0:
                     break
                 assert process.poll() is None, log_path.read_text()
-            assert any(p.get_type() == "MANUAL_CONTROL" and p.x > 0 for p in packets), log_path.read_text()
+            motion = [packet for packet in packets if packet.get_type() == "MANUAL_CONTROL"]
+            assert any(packet.z < 500 for packet in motion), (
+                [packet.z for packet in motion], log_path.read_text()
+            )
+            assert any(packet.x > 0 for packet in motion), log_path.read_text()
             process.send_signal(stop_signal)
             assert process.wait(timeout=8) == 0, log_path.read_text()
         while True:
             try:
                 data, _ = sock.recvfrom(65535)
                 packets.extend(decoder.parse_buffer(data) or [])
-            except socket.timeout:
+            except TimeoutError:
                 break
     finally:
         if process is not None and process.poll() is None:
             process.kill()
             process.wait(timeout=3)
         sock.close()
-    motion = [p for p in packets if p.get_type() == "MANUAL_CONTROL"]
+    motion = [packet for packet in packets if packet.get_type() == "MANUAL_CONTROL"]
     assert len(motion) >= 5
-    assert all((p.x, p.y, p.z, p.r) == (0, 0, 500, 0) for p in motion[-3:])
-    release = [p for p in packets if p.get_type() == "RC_CHANNELS_OVERRIDE"]
+    assert all((packet.x, packet.y, packet.z, packet.r) == (0, 0, 500, 0) for packet in motion[-3:])
+    release = [packet for packet in packets if packet.get_type() == "RC_CHANNELS_OVERRIDE"]
     assert release and all(getattr(release[-1], f"chan{i}_raw") == 0 for i in range(1, 9))
     if wire_version == "2":
         assert all(getattr(release[-1], f"chan{i}_raw") == 65534 for i in range(9, 19))
-    assert all(p.command == 183 for p in packets if p.get_type() == "COMMAND_LONG")
-    assert "permanent=true" in log_path.read_text()
+    assert all(packet.command == 183 for packet in packets if packet.get_type() == "COMMAND_LONG")
+    log_text = log_path.read_text()
+    assert "visual_control=false" in log_text
+    assert "bottom=timer" in log_text

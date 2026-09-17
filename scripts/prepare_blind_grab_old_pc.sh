@@ -17,7 +17,7 @@ if [[ ! -r "${LOCAL_CONFIG}" ]]; then
   echo "已生成本机配置：${LOCAL_CONFIG}"
 else
   echo "保留现有本机配置：${LOCAL_CONFIG}"
-  echo "旧配置没有 official_ros 段时，程序会使用官方包默认地址 api.bjetone.com:40184。"
+  echo "旧配置缺少 vertical/route/official_ros 段时，程序会自动采用当前永久盲抓默认值。"
 fi
 
 ./scripts/install.sh

@@ -74,7 +74,7 @@ def prepare_helper_processes(settings: VisionSettings, directory: Path) -> list[
         processes.append(HelperProcess("viewer", lambda attempt: [
             "ros2", "run", "rqt_image_view", "rqt_image_view",
             "/rov/annotated_image compressed",
-        ], restart=False))
+        ]))
     return processes
 
 

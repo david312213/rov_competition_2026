@@ -1,4 +1,4 @@
-"""在持续发送盲抓命令时旁路收集官方 ROS 展示遥测。"""
+"""在持续发送盲抓命令时旁路收集首次判底和官方ROS遥测。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .domain import MotionCommand
 
 
 class OfficialTelemetryMavlinkOutput(BlindMavlinkOutput):
-    """保持原盲抓发送语义，只额外解析已经到达的 MAVLink 报文。"""
+    """保持盲抓发送语义，并解析已经到达的MAVLink深度及展示遥测。"""
 
     def __init__(
         self,

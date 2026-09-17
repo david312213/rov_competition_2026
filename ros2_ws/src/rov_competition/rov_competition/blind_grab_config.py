@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .blind_grab import BlindGrabConfig, ServoAction, ServoSetpoint
@@ -148,25 +148,87 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
                 ))
         return ServoAction(tuple(values), number(spec.get("duration_s"), f"actions.{name}.duration_s"))
 
-    search, grasp, trigger = (section(root, key) for key in ("search", "grab", "trigger"))
+    # route/vertical 是永久沉底蛇形盲抓的新配置。旧电脑已有的 search 段
+    # 仍可直接使用：旧每带总时长会自动均分成四个抓取间前进段。
+    search = section(root, "search")
+    route = section(root, "route")
+    vertical = section(root, "vertical")
+    grasp = section(root, "grab")
+    route_steps = integer(
+        route.get("steps_per_lane", 4), "route.steps_per_lane",
+    )
+    if "step_duration_s" in route:
+        route_step_duration_s = number(
+            route.get("step_duration_s"), "route.step_duration_s",
+        )
+    else:
+        legacy_lane_duration_s = number(
+            search.get("lane_forward_duration_s", 20.0),
+            "search.lane_forward_duration_s",
+        )
+        route_step_duration_s = legacy_lane_duration_s / max(1, route_steps)
     mission = BlindGrabConfig(
-        lane_forward_duration_s=number(search.get("lane_forward_duration_s"), "search.lane_forward_duration_s"),
         advance_duration_s=number(grasp.get("advance_duration_s"), "grab.advance_duration_s"),
         open_gripper=action("open_gripper"), close_gripper=action("close_gripper"),
         arm_to_basket=action("arm_to_basket"), arm_to_grasp=action("arm_to_grasp"),
         release_duration_s=number(grasp.get("release_duration_s"), "grab.release_duration_s"),
-        forward_command=power(search.get("forward_command", 0.23), "search.forward_command"),
-        shift_command=power(search.get("shift_command", 0.20), "search.shift_command"),
-        shift_duration_s=number(search.get("shift_duration_s", 4.5), "search.shift_duration_s"),
-        turn_command=power(search.get("turn_command", 0.20), "search.turn_command"),
-        turn_duration_s=number(search.get("turn_duration_s", 11.5), "search.turn_duration_s"),
+        initial_descent_command=power(
+            vertical.get("initial_descent_command", -0.415),
+            "vertical.initial_descent_command",
+        ),
+        initial_bottom_stable_s=number(
+            vertical.get("initial_bottom_stable_s", 3.0),
+            "vertical.initial_bottom_stable_s",
+        ),
+        initial_bottom_tolerance_m=number(
+            vertical.get("initial_bottom_tolerance_m", 0.05),
+            "vertical.initial_bottom_tolerance_m",
+        ),
+        initial_minimum_descent_m=number(
+            vertical.get("initial_minimum_descent_m", 0.10),
+            "vertical.initial_minimum_descent_m",
+        ),
+        initial_fallback_s=number(
+            vertical.get("initial_fallback_s", 10.0),
+            "vertical.initial_fallback_s",
+        ),
+        ascent_command=power(
+            vertical.get("ascent_command", 0.415), "vertical.ascent_command",
+        ),
+        ascent_duration_s=number(
+            vertical.get("ascent_duration_s", 2.0), "vertical.ascent_duration_s",
+        ),
+        repeat_descent_command=power(
+            vertical.get("repeat_descent_command", -0.415),
+            "vertical.repeat_descent_command",
+        ),
+        repeat_descent_duration_s=number(
+            vertical.get("repeat_descent_duration_s", 5.0),
+            "vertical.repeat_descent_duration_s",
+        ),
+        route_forward_command=power(
+            route.get("forward_command", search.get("forward_command", 0.23)),
+            "route.forward_command",
+        ),
+        route_step_duration_s=route_step_duration_s,
+        route_steps_per_lane=route_steps,
+        shift_command=power(
+            route.get("shift_command", search.get("shift_command", 0.20)),
+            "route.shift_command",
+        ),
+        shift_duration_s=number(
+            route.get("shift_duration_s", search.get("shift_duration_s", 4.5)),
+            "route.shift_duration_s",
+        ),
+        turn_command=power(
+            route.get("turn_command", search.get("turn_command", 0.20)),
+            "route.turn_command",
+        ),
+        turn_duration_s=number(
+            route.get("turn_duration_s", search.get("turn_duration_s", 11.5)),
+            "route.turn_duration_s",
+        ),
         grab_forward_command=power(grasp.get("forward_command", 0.23), "grab.forward_command"),
-        required_boxes=integer(trigger.get("required_boxes", 4), "trigger.required_boxes"),
-        confirmation_frames=integer(trigger.get("confirmation_frames", 5), "trigger.confirmation_frames"),
-        confirmation_duration_s=number(trigger.get("confirmation_duration_s", 1.0), "trigger.confirmation_duration_s"),
-        missing_frame_timeout_s=number(trigger.get("missing_frame_timeout_s", 1.0), "trigger.missing_frame_timeout_s"),
-        fallback_after_s=number(trigger.get("fallback_after_s", 30.0), "trigger.fallback_after_s"),
-        grabs_per_batch=integer(grasp.get("grabs_per_batch", 10), "grab.grabs_per_batch"),
     )
     # 同时保持夹爪和机械臂姿态时不能给同一输出发送互相覆盖的两种 PWM。
     for claw in (mission.open_gripper, mission.close_gripper):

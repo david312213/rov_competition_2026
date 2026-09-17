@@ -1,147 +1,119 @@
-# 持续盲抓兜底入口
+# 永久沉底蛇形盲抓入口
 
-这是基于 `rov_competition_2026-qgc-rtp-fanout.zip` 增加的独立入口：
+入口命令是 `bash scripts/start_blind_grab.sh`，ROS安装入口是 `rov_blind_grab`。
 
-**人工就位 → 蛇形搜索 → 4框稳定 → 连续抓取投放10次 → 再观察；找框累计30秒或检测流中途断开1秒后，直接永久盲抓。**
+完整动作是：
 
-启动命令是 `bash scripts/start_blind_grab.sh`，Python/ROS安装入口为 `rov_blind_grab`。默认同时发布比赛官方ROS话题并监督官方TCP转发节点。
-这个入口不调用原搜索脚本、原控制网关、预检或许可服务，不自动触底、上浮、切换飞控模式或解锁；没有任务总时限、累计抓取上限和视觉故障取消条件。
+```text
+首次下潜判底
+→ 抓取并投筐
+→ 上潜2秒
+→ 蛇形前进一段
+→ 下潜5秒
+→ 再次抓取
+→ 永久循环
+```
 
-## 1. 当前实艇配置
+视觉系统继续运行YOLO并显示识别框，但检测数量、位置、断帧和模型状态都不会改变运动状态。
 
-在解压后的工程根目录执行。首次安装/构建继续使用本包的 `bash scripts/install.sh`。
+## 1. 当前动作参数
+
+配置模板位于 `ros2_ws/src/rov_competition/config/blind_grab.yaml`。首次使用可复制为本机配置：
 
 ```bash
 cp ros2_ws/src/rov_competition/config/blind_grab.yaml config/blind_grab.local.yaml
 ```
 
-模板已经写入当前确认的臂爪参数和动作时间，复制后即可解析启动。`vision` 下的两个 `null` 表示采用包内默认感知配置，可保留。搜索距离或抓取距离变化时，再修改对应时间。
+### 升沉与蛇形
 
-| 参数 | 含义 |
+| 参数 | 当前值 | 行为 |
+|---|---:|---|
+| `vertical.initial_descent_command` | -0.415 | 启动后立即下潜 |
+| `vertical.initial_bottom_stable_s` | 3秒 | 深度平台持续时间 |
+| `vertical.initial_bottom_tolerance_m` | 0.05米 | 平台窗口内允许的深度波动 |
+| `vertical.initial_minimum_descent_m` | 0.10米 | 压力判底前至少下降距离 |
+| `vertical.initial_fallback_s` | 10秒 | 未取得有效判底结果时直接开始抓取 |
+| `vertical.ascent_command` | +0.415 | 每次投放后的上潜指令 |
+| `vertical.ascent_duration_s` | 2秒 | 每次固定上潜时间 |
+| `vertical.repeat_descent_command` | -0.415 | 后续固定下潜指令 |
+| `vertical.repeat_descent_duration_s` | 5秒 | 后续每次下潜时间 |
+| `route.forward_command` | 0.23 | 蛇形前进控制量 |
+| `route.step_duration_s` | 5秒 | 每次抓取之间的前进段 |
+| `route.steps_per_lane` | 4 | 每带四段，共前进20秒 |
+| `route.shift_command/duration_s` | 0.20 / 4.5秒 | 到带尾后的横移 |
+| `route.turn_command/duration_s` | 0.20 / 11.5秒 | 横移后的转艇 |
+
+第一条带使用负方向横移和转向，下一条带使用正方向，之后持续交替。第四个5秒前进段结束后，艇保持离底状态完成横移和转向，再下潜5秒并抓取。
+
+### 抓取与PWM
+
+每次底部动作固定为：
+
+```text
+张爪0.5秒
+→ 前进0.23持续1秒
+→ 闭爪0.5秒
+→ 机械臂后仰到筐位1.8秒
+→ 张爪投放2秒
+→ 机械臂回垂直抓取位2秒
+```
+
+| 动作 | 飞控输出 | PWM |
+|---|---:|---:|
+| 张爪 | S11/AUX3 | 730 |
+| 闭爪 | S11/AUX3 | 575 |
+| 机械臂后仰到筐位 | S10/AUX2 | 1810 |
+| 机械臂垂直向下抓取位 | S10/AUX2 | 710 |
+
+S10的1300只作为机械臂水平参考，自动流程不发送该值。当前PWM与动作时间来自2026年9月17日实艇标定。
+
+## 2. 状态顺序
+
+| 状态 | 输出与转换 |
 |---|---|
-| `search.lane_forward_duration_s` | 每条蛇形搜索带前进20秒 |
-| `grab.advance_duration_s` | 每次开爪后，以0.23向前抓取1秒 |
-| `grab.release_duration_s` | 在筐上方开爪投放并保持2秒 |
-| `actions.open_gripper` | S11发送730，等待0.5秒 |
-| `actions.close_gripper` | S11发送575，等待0.5秒 |
-| `actions.arm_to_basket` | S10发送1810，等待1.8秒 |
-| `actions.arm_to_grasp` | S10发送710，等待2秒 |
-| `official_ros.server_port` | 官方包提供的平台TCP端口40184 |
+| `initial_descent` | 持续发送垂直 `-0.415`。压力深度下降至少0.10米后，在0.05米范围稳定3秒即判底；无深度或未稳定满条件时，第10秒直接进入抓取。 |
+| `open` | 张爪730、机械臂710，运动归中，等待0.5秒。 |
+| `advance` | 张爪保持730、机械臂保持710，前进0.23持续1秒。 |
+| `close` | 停艇并闭爪575，等待0.5秒。 |
+| `transfer` | 闭爪保持575，机械臂转到1810，等待1.8秒。 |
+| `release` | 机械臂保持1810，张爪730投放，等待2秒。 |
+| `return` | 张爪保持730，机械臂回710，等待2秒。 |
+| `ascending` | 垂直 `+0.415` 持续2秒。 |
+| `forward` | 前进0.23持续5秒。前三段结束后直接进入定时下潜；第四段后进入横移。 |
+| `shift` | 按当前带方向横移0.20持续4.5秒。 |
+| `turn` | 同方向转艇0.20持续11.5秒，然后切换下一条带。 |
+| `repeat_descent` | 垂直 `-0.415` 持续5秒，再进入下一次抓取。 |
 
-每个动作的 `outputs` 可以填写多路舵机。`output_channel` 是飞控的**绝对 SERVO 输出号**，不会自动加8。夹爪和机械臂使用各自的通道；开/闭爪通常使用同一组夹爪通道，转筐/回位通常使用同一组机械臂通道。
+程序没有10次上限、批次结束、任务总时限、视觉门槛、最大深度终止或遥测失效终止状态。
 
-本艇在2026年9月16日现场确认的臂爪参数已经写入模板：
+## 3. 一键启动
 
-| 动作 | QGC映射 | 飞控输出 | PWM |
-|---|---|---:|---:|
-| 开爪 | `servo_3`（按钮9/10） | S11/AUX3 | 730 |
-| 闭爪 | `servo_3`（按钮9/10） | S11/AUX3 | 575 |
-| 机械臂到筐位/收回 | `servo_2`（按钮14/15） | S10/AUX2 | 1810 |
-| 机械臂到抓取位/下放 | `servo_2`（按钮14/15） | S10/AUX2 | 710 |
-
-2026-09-17 实艇标定确认：夹爪575为闭合抓取、730为张开；机械臂710为垂直向下抓取位、1300为水平参考、1810为后仰筐位。自动流程回抓取位使用710。盲抓入口直接发送上述固定PWM，不依赖QGC按钮保持时间。每次完整抓取约7.8秒，每批10次约78秒。
-
-旧电脑已存在本地配置时，拉取更新后运行 `./scripts/apply_corrected_pwm_direction.sh`，脚本会先备份再只写入四个实测PWM。
-
-默认使用 `MANUAL_CONTROL`，前进0.23、横移0.20、转艇0.20。各轴符号在 `mavlink.directions` 中填写；没有旧网关的额外统一限幅或斜率限制。接口取值为归一化的 `[-1, 1]`。
-
-MAVLink连接默认 `udpin:0.0.0.0:14551`，目标ID默认1/1；如果实艇使用其他端点或ID，在此文件修改。官方ROS旁路从同一连接已经收到的报文提取真实遥测，不等待遥测，也不以遥测有效性决定是否继续抓取。
-
-比赛方提供的 `ros2_topic_forwarding` 包位于 `ros2_ws/src/ros2_topic_forwarding/`。模板默认连接 `api.bjetone.com:40184`；如果平台重新分配端口，只改本机 `official_ros.server_port`。
-
-## 2. 启动与关闭
-
-### 单独检查夹爪和机械臂
-
-关闭持续盲抓和其他运动控制程序后运行：
+启动前由操作员让艇完全入水，在QGC中设置模式并解锁，同时关闭其他会发送运动指令的程序。随后运行：
 
 ```bash
-./scripts/test_arm_gripper.sh
+cd /home/persica/rov_competition_2026
+./scripts/start_blind_grab.sh
 ```
 
-按键无需回车：`a` 张开夹爪，`b` 闭合夹爪，`c` 机械臂后仰到筐位，`d` 恢复抓取位，`q` 或 `Ctrl+C` 退出。程序直接使用 `config/blind_grab.local.yaml`，不存在时使用包内模板，并在启动时打印每个动作实际使用的绝对输出通道和 PWM。测试期间四个运动轴持续发送归中值，不会自动解锁飞控；退出后保留最后一次舵机姿态。
+本入口不会自动切换模式或解锁。启动后不等待ROS、视频、模型、录像、查看器、官方服务器或MAVLink连接，状态机立即开始首次下潜计时。
 
-PWM不确定时运行手动试调入口：
+只检查配置而不连接设备：
 
 ```bash
-./scripts/tune_arm_gripper_pwm.sh
+./scripts/start_blind_grab.sh --dry-run
 ```
 
-先输入 `a/b/c/d` 和回车选择动作，再输入一个PWM整数并回车。程序使用该动作在配置中的通道立即发送输入值，并持续保持夹爪和机械臂各自最后一次输入。`q` 退出时会列出四个动作本次最后测试值。试调不会改写 `config/blind_grab.local.yaml`。
-
-旧电脑首次拉取本分支后，可以一次完成依赖安装、ROS构建和官方接口离线检查：
+已有独立视频和YOLO进程时：
 
 ```bash
-./scripts/prepare_blind_grab_old_pc.sh
+./scripts/start_blind_grab.sh --no-helpers
 ```
 
-详细更新与现场检查步骤见[官方ROS转发与旧电脑启动](官方ROS转发与旧电脑启动.md)。
+人工关闭使用 `Ctrl+C`。SIGTERM和终端关闭产生的SIGHUP也会结束循环，尝试发送三帧运动归中并释放控制。
 
-先由你们将艇放到抓取高度，在QGC设好工作模式并解锁。关闭旧网关和其他运动控制入口，让本入口使用自己的MAVLink连接；程序本身不会检查或自动关闭其他控制程序。
+## 4. 视觉与通信
 
-可以先只查看解析后的配置。这条命令不连接飞控、不初始化ROS、不启动视频进程：
-
-```bash
-bash scripts/start_blind_grab.sh --dry-run
-```
-
-执行：
-
-```bash
-bash scripts/start_blind_grab.sh
-```
-
-这一个入口会同时启动盲抓、官方ROS发布器和官方TCP转发节点。启动后另开终端执行：
-
-```bash
-./scripts/check_official_ros.sh --live
-```
-
-它会核对官方节点、`/cmd_vel`、`/cmd_accel`、`/robot_data` 和到平台端口的TCP连接。
-
-启动即开始搜索，同时给出开爪和机械臂抓取位指令。不需要确认词、额外许可服务或再按开始键。**在运行终端按 `Ctrl+C` 结束抓取**；`SIGTERM` 和终端关闭产生的 `SIGHUP` 也走正常关闭流程：停止循环，发送运动归中、释放控制，然后清理本入口启动的辅助进程。
-
-已完成ROS构建的环境也可以直接使用：
-
-```bash
-ros2 run rov_competition rov_blind_grab --config "$PWD/config/blind_grab.local.yaml"
-```
-
-另选配置：
-
-```bash
-bash scripts/start_blind_grab.sh --config /实际路径/blind_grab.local.yaml
-```
-
-如果已经另行运行视频分发和YOLO，使用以下命令只启动盲抓控制及检测订阅：
-
-```bash
-bash scripts/start_blind_grab.sh --no-helpers
-```
-
-## 3. 状态规则
-
-| 状态 | 行为及下一步 |
-|---|---|
-| 搜索 | 前进一带 → 左横移4.5秒 → 左转艇11.5秒 → 前进一带 → 右横移4.5秒 → 右转艇11.5秒，循环。 |
-| 停车确认 | 搜索任意阶段出现至少4框，立即四轴回中。触发停车的那张图不计数；停车后至少5张新图，且最后一张覆盖至少1秒，才进入盲抓。 |
-| 确认中丢框 | 收到有效新帧但不足4框时，恢复被打断的搜索阶段。重复帧不会刷新时间或累计次数。 |
-| 检测中途断流 | 检测流至少成功收到过一帧后，连续1秒没有新帧，立即锁定永久盲抓；检测源读取异常也立即锁定。 |
-| 一批盲抓 | 每次执行开爪 → 前进 → 停艇闭爪并保持 → 转臂到筐 → 开爪投放 → 转臂回位；连续做10次。框消失或检测断流不打断当前动作。 |
-| 一批结束 | 当前还有4框则重新停车确认；不足则恢复搜索。每带的剩余搜索时间保持不变。 |
-| 永久盲抓 | 找框时间累计到30秒或检测中途断流时，门槛直接降为0。一批接一批继续抓取，视觉恢复也不回搜索、不恢复门槛。重新启动进程才恢复4框模式。 |
-
-30秒只累计**搜索和停车确认**时间。误检停车不清零；确认成功开始一批时清零；执行整批抓取时不计时，整批结束后重新开始累计。即使一批动作超过30秒，也不会因此降级。
-
-动作时间使用单调时钟，不受系统日期调整影响。每个抓取阶段按配置时间推进，不等待舵机ACK或抓获反馈。当前舵机目标每0.25秒重发一次，运动指令以20 Hz发送。
-
-## 4. 视觉、视频与日志
-
-默认计数类别为 `scallop`，置信度0.18。改变 `vision.target_labels` 可以选其他模型已有类别。只看框数量，不做单目标跟踪、位置稳定或图像对准。
-
-感知节点也使用0.18阈值，避免原配置的0.45在上游滤掉目标。每次运行会生成独立的感知配置并把模型路径转成绝对路径，原感知配置不被覆盖。
-
-原始视频链路保持为：
+默认识别类别是 `scallop`，置信度是0.18。视频链路保持为：
 
 ```text
 艇端 → QGC 5600
@@ -149,32 +121,47 @@ bash scripts/start_blind_grab.sh --no-helpers
                       └→ 可选录像 5704
 ```
 
-程序不会替你们修改艇端的第二路视频发送配置，也不会占用QGC的5600。与原始压缩包一样，本交付不包含 `.pt` 权重；沿用你们已部署的权重，必要时通过 `vision.autonomy_config` 指向已有配置。
+`/rov/detections` 只用于终端显示框数和带框查看器。检测到0框、很多框、重复帧、断流或解析异常产生相同的运动序列。
 
-视频分发、YOLO、查看器和可选录像由辅助线程启动，主控制不等待它们就绪。启动后始终没有收到过检测帧时，仍按原规则搜索并在30秒后进入永久盲抓；检测流一旦正常出过帧，随后连续1秒没有新帧就立即进入永久盲抓。有效的0框消息表示画面仍在运行，不会按断流处理。MAVLink连接/发送异常记录后持续重试。官方ROS初始化、发布、服务器连接或转发节点异常也只记录并重试，不会暂停搜索、抓取或30秒计时。
+视频分发、YOLO、查看器和可选录像由独立线程管理，启动失败或退出后持续重试。MAVLink发送失败时状态时钟继续，通信线程持续重连；恢复连接后发送当时状态的运动和舵机目标。
 
-`vision.show_viewer` 默认开启；关闭查看器不取消抓取。`vision.record_video` 默认关闭，设为 `true` 时记录原始MKV；录像重启会使用新文件编号。
+比赛官方ROS数据链继续独立运行：20 Hz发布 `/cmd_vel`、`/cmd_accel`，5 Hz发布 `/robot_data`，并转发 `/imu`、`/magnetometer`、`/pressure`。官方ROS或TCP进程失败只触发重试，不改变盲抓状态。
 
-终端输出当前状态、动作阶段、框数、门槛、找框累计时间、搜索带和抓取次数。带框窗口由独立感知节点绘制，抓取控制状态以终端的 `[盲抓]` 行为准。辅助日志在 `output/blind_grab_sessions/<本次会话>/logs/`；官方节点日志在本次会话目录的 `official_ros_forwarder.log`。
+终端日志示例字段：
 
-`close_commands` 是状态机安排闭爪指令的次数，`cycles` 是完成动作序列的次数；均不表示已收到ACK或实际收获数量。
-
-## 5. 代码与离线验证
-
-- `blind_grab.py`：纯状态机和可冻结的蛇形进度。
-- `blind_grab_config.py`：独立动作、通信和视觉配置。
-- `blind_grab_mavlink.py`：直接运动/舵机输出和通信重试。
-- `blind_grab_official_mavlink.py`、`blind_grab_telemetry.py`：旁路解析真实MAVLink遥测。
-- `blind_grab_official.py`：官方ROS话题发布和官方TCP节点监督。
-- `blind_grab_runtime.py`：20 Hz主循环、检测接收、通信线程及手动关闭。
-- `blind_grab_helpers.py`：独立视频/感知进程管理。
-
-上述模块位于 `ros2_ws/src/rov_competition/rov_competition/`。
-
-```bash
-python -m pytest -q tests/test_blind_grab*.py tests/test_semicircle_search.py
+```text
+state=repeat_descent phase=repeat_descent boxes=3 visual_control=false
+bottom=pressure lane=2 segment=1/4 close_commands=8 cycles=8
 ```
 
-测试包括虚拟时钟、1000次动作循环、丢帧/误检、原蛇形时序、辅助进程失败、通信重试、官方消息字段与话题、真实遥测单位换算、官方节点重启，以及只连接测试自身 `127.0.0.1` 临时端口的MAVLink报文和关闭信号验证。没有连接实艇，没有验证实际行驶距离、臂爪动作时间或收获效果。
+`close_commands` 是状态机安排闭爪的次数，`cycles` 是完成整套抓取投放动作的次数，都不代表实际收获数量。
 
-完整测试结果及未执行的现场项目见 [持续盲抓验证记录](持续盲抓验证.md)。
+## 5. 旧电脑更新
+
+```bash
+cd /home/persica/rov_competition_2026
+git fetch origin
+git switch codex/continuous-blind-grab
+git pull --ff-only origin codex/continuous-blind-grab
+./scripts/prepare_blind_grab_old_pc.sh
+```
+
+旧的 `config/blind_grab.local.yaml` 可以保留。缺少 `vertical` 和 `route` 段时，加载器自动采用本页列出的新默认值；旧的 `trigger`、`required_boxes`、`fallback_after_s` 和 `grabs_per_batch` 不再参与控制。
+
+臂爪单独测试：
+
+```bash
+./scripts/test_arm_gripper.sh
+```
+
+手动输入PWM试调：
+
+```bash
+./scripts/tune_arm_gripper_pwm.sh
+```
+
+官方数据链现场检查：
+
+```bash
+./scripts/check_official_ros.sh --live
+```
