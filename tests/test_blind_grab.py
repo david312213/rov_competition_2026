@@ -96,7 +96,7 @@ def test_one_grab_runs_all_six_phases_then_ascends_for_two_seconds():
     assert [d.phase for d in states[:-1]] == [
         "open", "advance", "close", "transfer", "release", "return",
     ]
-    assert states[1].motion.forward == .23
+    assert states[1].motion.forward == .8
     assert states[2].servos == c.close_gripper.outputs + c.arm_to_grasp.outputs
     assert states[3].servos == c.close_gripper.outputs + c.arm_to_basket.outputs
     assert states[4].servos == c.open_gripper.outputs + c.arm_to_basket.outputs
@@ -125,7 +125,7 @@ def test_each_normal_cycle_ascends_moves_five_seconds_and_descends_five_seconds(
     assert decision.state is BlindState.ASCENDING
     now, decision = advance_one_phase(mission, now)
     assert decision.state is BlindState.FORWARD
-    assert decision.motion.forward == .23
+    assert decision.motion.forward == .8
     now, decision = advance_one_phase(mission, now)
     assert decision.state is BlindState.REPEAT_DESCENT
     assert decision.segment_in_lane == 1
@@ -160,8 +160,8 @@ def test_four_forward_steps_then_shift_and_turn_with_alternating_directions():
             shifts.append((decision.lane_index, decision.motion.lateral))
         elif decision.state is BlindState.TURN:
             turns.append((decision.lane_index, decision.motion.yaw))
-    assert shifts == [(0, -.20), (1, .20)]
-    assert turns == [(0, -.20), (1, .20)]
+    assert shifts == [(0, -.8), (1, .8)]
+    assert turns == [(0, -.8), (1, .8)]
     assert mission.completed_cycles > 4
 
 

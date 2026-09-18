@@ -1,6 +1,6 @@
 # 永久沉底蛇形盲抓入口的参数模板。
 # 当前已写入2026-09-17实艇标定的臂爪通道、PWM和动作时间，
-# 以及2026-09-18指定的0.8升沉功率。
+# 以及2026-09-18指定的全部运动功率0.8。
 # 复制到根目录 config/blind_grab.local.yaml 后可按现场距离微调时间。
 # 启动前由操作员设置飞控模式并解锁；启动后立即下潜。
 
@@ -20,17 +20,17 @@ vertical:
 
 route:
   # 每带四段，每段前进5秒，总计20秒。
-  forward_command: 0.23
+  forward_command: 0.80
   step_duration_s: 5.0
   steps_per_lane: 4
   # 第四段后先横移再转艇，左右方向逐带交替。
-  shift_command: 0.20
+  shift_command: 0.80
   shift_duration_s: 4.5
-  turn_command: 0.20
+  turn_command: 0.80
   turn_duration_s: 11.5
 
 grab:
-  forward_command: 0.23
+  forward_command: 0.80
   advance_duration_s: 1.0
   # 转到筐上方后开爪，保持这么久再让机械臂回位。
   release_duration_s: 2.0

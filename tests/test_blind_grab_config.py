@@ -28,11 +28,14 @@ def test_vehicle_template_contains_permanent_dive_route_and_action_timing():
     assert mission.ascent_duration_s == 2
     assert mission.repeat_descent_command == pytest.approx(-.8)
     assert mission.repeat_descent_duration_s == 5
-    assert mission.route_forward_command == pytest.approx(.23)
+    assert mission.route_forward_command == pytest.approx(.8)
     assert mission.route_step_duration_s == 5
     assert mission.route_steps_per_lane == 4
+    assert mission.shift_command == pytest.approx(.8)
     assert mission.shift_duration_s == 4.5
+    assert mission.turn_command == pytest.approx(.8)
     assert mission.turn_duration_s == 11.5
+    assert mission.grab_forward_command == pytest.approx(.8)
     assert mission.advance_duration_s == 1
     assert mission.release_duration_s == 2
     assert mission.open_gripper.duration_s == .5
@@ -73,7 +76,7 @@ def test_old_permission_flags_and_visual_trigger_values_do_not_gate_mission(tmp_
         "fallback_after_s": 9999,
     }
     loaded = load_blind_grab_config(save(tmp_path, document))
-    assert loaded.mission.route_forward_command == .23
+    assert loaded.mission.route_forward_command == .8
     assert loaded.mission.initial_fallback_s == 10
     assert loaded.vision.confidence == .18
     assert loaded.vision.target_labels == ("scallop",)
@@ -105,9 +108,10 @@ def test_legacy_local_config_without_new_sections_gets_new_defaults(tmp_path):
     assert mission.repeat_descent_duration_s == 5
     assert mission.route_steps_per_lane == 4
     assert mission.route_step_duration_s == 5
-    assert mission.route_forward_command == .25
-    assert mission.shift_command == .21
-    assert mission.turn_command == .22
+    assert mission.route_forward_command == .8
+    assert mission.shift_command == .8
+    assert mission.turn_command == .8
+    assert mission.grab_forward_command == .8
 
 
 def test_multi_output_gripper_and_separate_arm_mapping_are_preserved(tmp_path):

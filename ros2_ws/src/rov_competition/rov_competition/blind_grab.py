@@ -47,14 +47,14 @@ class BlindGrabConfig:
     ascent_duration_s: float = 2.0
     repeat_descent_command: float = -0.8
     repeat_descent_duration_s: float = 5.0
-    route_forward_command: float = 0.23
+    route_forward_command: float = 0.8
     route_step_duration_s: float = 5.0
     route_steps_per_lane: int = 4
-    shift_command: float = 0.20
+    shift_command: float = 0.8
     shift_duration_s: float = 4.5
-    turn_command: float = 0.20
+    turn_command: float = 0.8
     turn_duration_s: float = 11.5
-    grab_forward_command: float = 0.23
+    grab_forward_command: float = 0.8
 
 
 @dataclass(frozen=True)

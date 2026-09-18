@@ -207,13 +207,13 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
             "vertical.repeat_descent_duration_s",
         ),
         route_forward_command=power(
-            route.get("forward_command", search.get("forward_command", 0.23)),
+            route.get("forward_command", 0.8),
             "route.forward_command",
         ),
         route_step_duration_s=route_step_duration_s,
         route_steps_per_lane=route_steps,
         shift_command=power(
-            route.get("shift_command", search.get("shift_command", 0.20)),
+            route.get("shift_command", 0.8),
             "route.shift_command",
         ),
         shift_duration_s=number(
@@ -221,14 +221,14 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
             "route.shift_duration_s",
         ),
         turn_command=power(
-            route.get("turn_command", search.get("turn_command", 0.20)),
+            route.get("turn_command", 0.8),
             "route.turn_command",
         ),
         turn_duration_s=number(
             route.get("turn_duration_s", search.get("turn_duration_s", 11.5)),
             "route.turn_duration_s",
         ),
-        grab_forward_command=power(grasp.get("forward_command", 0.23), "grab.forward_command"),
+        grab_forward_command=power(grasp.get("forward_command", 0.8), "grab.forward_command"),
     )
     # 同时保持夹爪和机械臂姿态时不能给同一输出发送互相覆盖的两种 PWM。
     for claw in (mission.open_gripper, mission.close_gripper):

@@ -36,27 +36,33 @@ import tempfile
 path = Path(sys.argv[1]).expanduser().resolve()
 original = path.read_text(encoding="utf-8")
 lines = original.splitlines()
-fields = [
-    ("initial_descent_command", "-0.80"),
-    ("ascent_command", "0.80"),
-    ("repeat_descent_command", "-0.80"),
-]
+sections = {
+    "vertical": [
+        ("initial_descent_command", "-0.80"),
+        ("ascent_command", "0.80"),
+        ("repeat_descent_command", "-0.80"),
+    ],
+    "route": [
+        ("forward_command", "0.80"),
+        ("shift_command", "0.80"),
+        ("turn_command", "0.80"),
+    ],
+    "grab": [("forward_command", "0.80")],
+}
 
-try:
-    start = next(
-        index for index, line in enumerate(lines)
-        if re.match(r"^vertical\s*:\s*(?:#.*)?$", line)
-    )
-except StopIteration:
-    if lines and lines[-1].strip():
-        lines.append("")
-    lines.extend([
-        "vertical:",
-        "  initial_descent_command: -0.80",
-        "  ascent_command: 0.80",
-        "  repeat_descent_command: -0.80",
-    ])
-else:
+for section_name, fields in sections.items():
+    try:
+        start = next(
+            index for index, line in enumerate(lines)
+            if re.match(rf"^{re.escape(section_name)}\s*:\s*(?:#.*)?$", line)
+        )
+    except StopIteration:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"{section_name}:")
+        lines.extend(f"  {name}: {value}" for name, value in fields)
+        continue
+
     end = len(lines)
     for index in range(start + 1, len(lines)):
         line = lines[index]
@@ -81,7 +87,7 @@ else:
 
 updated = "\n".join(lines) + "\n"
 if updated == original:
-    print(f"盲抓升沉功率已是0.8：{path}")
+    print(f"盲抓所有运动功率已是0.8：{path}")
     raise SystemExit(0)
 
 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -99,5 +105,8 @@ finally:
         os.unlink(temporary_name)
 
 print(f"已备份：{backup}")
-print(f"已设置盲抓升沉功率：首次下潜=-0.8，上潜=+0.8，循环下潜=-0.8")
+print(
+    "已设置盲抓全部运动功率：下潜=-0.8，上潜=+0.8，"
+    "前进/抓取前进/横移/转向=0.8"
+)
 PY

@@ -48,18 +48,18 @@ def config_document():
             "repeat_descent_duration_s": 5.0,
         },
         "route": {
-            "forward_command": 0.23,
+            "forward_command": 0.8,
             "step_duration_s": 5.0,
             "steps_per_lane": 4,
-            "shift_command": 0.20,
+            "shift_command": 0.8,
             "shift_duration_s": 4.5,
-            "turn_command": 0.20,
+            "turn_command": 0.8,
             "turn_duration_s": 11.5,
         },
         "grab": {
             "advance_duration_s": 1.0,
             "release_duration_s": 1.0,
-            "forward_command": 0.23,
+            "forward_command": 0.8,
         },
         "actions": {
             name: {"duration_s": 1.0, "outputs": [{"output_channel": channel, "pwm": pwm}]}
