@@ -37,29 +37,29 @@ def fallback_to_first_grab(mission: BlindGrabMission, start: float = 0.0) -> flo
 def config_document():
     return {
         "vertical": {
-            "initial_descent_command": -0.8,
+            "initial_descent_command": -1.0,
             "initial_bottom_stable_s": 3.0,
             "initial_bottom_tolerance_m": 0.05,
             "initial_minimum_descent_m": 0.10,
             "initial_fallback_s": 10.0,
-            "ascent_command": 0.8,
+            "ascent_command": 1.0,
             "ascent_duration_s": 2.0,
-            "repeat_descent_command": -0.8,
+            "repeat_descent_command": -1.0,
             "repeat_descent_duration_s": 5.0,
         },
         "route": {
-            "forward_command": 0.8,
+            "forward_command": 1.0,
             "step_duration_s": 5.0,
             "steps_per_lane": 4,
-            "shift_command": 0.8,
+            "shift_command": 1.0,
             "shift_duration_s": 4.5,
-            "turn_command": 0.8,
+            "turn_command": 1.0,
             "turn_duration_s": 11.5,
         },
         "grab": {
             "advance_duration_s": 1.0,
             "release_duration_s": 1.0,
-            "forward_command": 0.8,
+            "forward_command": 1.0,
         },
         "actions": {
             name: {"duration_s": 1.0, "outputs": [{"output_channel": channel, "pwm": pwm}]}

@@ -173,7 +173,7 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
         arm_to_basket=action("arm_to_basket"), arm_to_grasp=action("arm_to_grasp"),
         release_duration_s=number(grasp.get("release_duration_s"), "grab.release_duration_s"),
         initial_descent_command=power(
-            vertical.get("initial_descent_command", -0.8),
+            vertical.get("initial_descent_command", -1.0),
             "vertical.initial_descent_command",
         ),
         initial_bottom_stable_s=number(
@@ -193,13 +193,13 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
             "vertical.initial_fallback_s",
         ),
         ascent_command=power(
-            vertical.get("ascent_command", 0.8), "vertical.ascent_command",
+            vertical.get("ascent_command", 1.0), "vertical.ascent_command",
         ),
         ascent_duration_s=number(
             vertical.get("ascent_duration_s", 2.0), "vertical.ascent_duration_s",
         ),
         repeat_descent_command=power(
-            vertical.get("repeat_descent_command", -0.8),
+            vertical.get("repeat_descent_command", -1.0),
             "vertical.repeat_descent_command",
         ),
         repeat_descent_duration_s=number(
@@ -207,13 +207,13 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
             "vertical.repeat_descent_duration_s",
         ),
         route_forward_command=power(
-            route.get("forward_command", 0.8),
+            route.get("forward_command", 1.0),
             "route.forward_command",
         ),
         route_step_duration_s=route_step_duration_s,
         route_steps_per_lane=route_steps,
         shift_command=power(
-            route.get("shift_command", 0.8),
+            route.get("shift_command", 1.0),
             "route.shift_command",
         ),
         shift_duration_s=number(
@@ -221,14 +221,14 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
             "route.shift_duration_s",
         ),
         turn_command=power(
-            route.get("turn_command", 0.8),
+            route.get("turn_command", 1.0),
             "route.turn_command",
         ),
         turn_duration_s=number(
             route.get("turn_duration_s", search.get("turn_duration_s", 11.5)),
             "route.turn_duration_s",
         ),
-        grab_forward_command=power(grasp.get("forward_command", 0.8), "grab.forward_command"),
+        grab_forward_command=power(grasp.get("forward_command", 1.0), "grab.forward_command"),
     )
     # 同时保持夹爪和机械臂姿态时不能给同一输出发送互相覆盖的两种 PWM。
     for claw in (mission.open_gripper, mission.close_gripper):

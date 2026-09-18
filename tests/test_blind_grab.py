@@ -41,7 +41,7 @@ def test_start_immediately_descends_with_open_claw_and_arm_at_grasp_pose():
     c = config()
     decision = BlindGrabMission(c).step(0.0)
     assert decision.state is BlindState.INITIAL_DESCENT
-    assert decision.motion.vertical == pytest.approx(-0.8)
+    assert decision.motion.vertical == pytest.approx(-1.0)
     assert decision.servos == c.open_gripper.outputs + c.arm_to_grasp.outputs
     assert decision.bottom_source == "pending"
 
@@ -96,14 +96,14 @@ def test_one_grab_runs_all_six_phases_then_ascends_for_two_seconds():
     assert [d.phase for d in states[:-1]] == [
         "open", "advance", "close", "transfer", "release", "return",
     ]
-    assert states[1].motion.forward == .8
+    assert states[1].motion.forward == 1.0
     assert states[2].servos == c.close_gripper.outputs + c.arm_to_grasp.outputs
     assert states[3].servos == c.close_gripper.outputs + c.arm_to_basket.outputs
     assert states[4].servos == c.open_gripper.outputs + c.arm_to_basket.outputs
     assert states[5].servos == c.open_gripper.outputs + c.arm_to_grasp.outputs
     ascending = states[-1]
     assert ascending.state is BlindState.ASCENDING
-    assert ascending.motion.vertical == pytest.approx(.8)
+    assert ascending.motion.vertical == pytest.approx(1.0)
     assert ascending.completed_cycles == 1
     assert ascending.grasp_command_count == 1
 
@@ -125,11 +125,11 @@ def test_each_normal_cycle_ascends_moves_five_seconds_and_descends_five_seconds(
     assert decision.state is BlindState.ASCENDING
     now, decision = advance_one_phase(mission, now)
     assert decision.state is BlindState.FORWARD
-    assert decision.motion.forward == .8
+    assert decision.motion.forward == 1.0
     now, decision = advance_one_phase(mission, now)
     assert decision.state is BlindState.REPEAT_DESCENT
     assert decision.segment_in_lane == 1
-    assert decision.motion.vertical == pytest.approx(-.8)
+    assert decision.motion.vertical == pytest.approx(-1.0)
     now, decision = advance_one_phase(mission, now)
     assert decision.state is BlindState.GRABBING
     assert decision.phase == "open"
@@ -160,8 +160,8 @@ def test_four_forward_steps_then_shift_and_turn_with_alternating_directions():
             shifts.append((decision.lane_index, decision.motion.lateral))
         elif decision.state is BlindState.TURN:
             turns.append((decision.lane_index, decision.motion.yaw))
-    assert shifts == [(0, -.8), (1, .8)]
-    assert turns == [(0, -.8), (1, .8)]
+    assert shifts == [(0, -1.0), (1, 1.0)]
+    assert turns == [(0, -1.0), (1, 1.0)]
     assert mission.completed_cycles > 4
 
 

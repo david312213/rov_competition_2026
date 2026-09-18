@@ -8,7 +8,7 @@ CONFIG="${PROJECT_DIR}/config/blind_grab.local.yaml"
 
 if [[ $# -gt 0 ]]; then
   if [[ $# -ne 2 || "$1" != "--config" ]]; then
-    echo "用法：./scripts/apply_blind_grab_power_08.sh [--config YAML路径]" >&2
+    echo "用法：./scripts/apply_blind_grab_power_10.sh [--config YAML路径]" >&2
     exit 2
   fi
   CONFIG="$2"
@@ -38,16 +38,16 @@ original = path.read_text(encoding="utf-8")
 lines = original.splitlines()
 sections = {
     "vertical": [
-        ("initial_descent_command", "-0.80"),
-        ("ascent_command", "0.80"),
-        ("repeat_descent_command", "-0.80"),
+        ("initial_descent_command", "-1.00"),
+        ("ascent_command", "1.00"),
+        ("repeat_descent_command", "-1.00"),
     ],
     "route": [
-        ("forward_command", "0.80"),
-        ("shift_command", "0.80"),
-        ("turn_command", "0.80"),
+        ("forward_command", "1.00"),
+        ("shift_command", "1.00"),
+        ("turn_command", "1.00"),
     ],
-    "grab": [("forward_command", "0.80")],
+    "grab": [("forward_command", "1.00")],
 }
 
 for section_name, fields in sections.items():
@@ -87,11 +87,11 @@ for section_name, fields in sections.items():
 
 updated = "\n".join(lines) + "\n"
 if updated == original:
-    print(f"盲抓所有运动功率已是0.8：{path}")
+    print(f"盲抓所有运动功率已是1.0：{path}")
     raise SystemExit(0)
 
 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-backup = path.with_name(f"{path.name}.before-power-08-{stamp}")
+backup = path.with_name(f"{path.name}.before-power-10-{stamp}")
 shutil.copy2(path, backup)
 fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
 try:
@@ -106,7 +106,7 @@ finally:
 
 print(f"已备份：{backup}")
 print(
-    "已设置盲抓全部运动功率：下潜=-0.8，上潜=+0.8，"
-    "前进/抓取前进/横移/转向=0.8"
+    "已设置盲抓全部运动功率：下潜=-1.0，上潜=+1.0，"
+    "前进/抓取前进/横移/转向=1.0"
 )
 PY

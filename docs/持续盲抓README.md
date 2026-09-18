@@ -28,20 +28,20 @@ cp ros2_ws/src/rov_competition/config/blind_grab.yaml config/blind_grab.local.ya
 
 | 参数 | 当前值 | 行为 |
 |---|---:|---|
-| `vertical.initial_descent_command` | -0.8 | 启动后立即下潜 |
+| `vertical.initial_descent_command` | -1.0 | 启动后立即下潜 |
 | `vertical.initial_bottom_stable_s` | 3秒 | 深度平台持续时间 |
 | `vertical.initial_bottom_tolerance_m` | 0.05米 | 平台窗口内允许的深度波动 |
 | `vertical.initial_minimum_descent_m` | 0.10米 | 压力判底前至少下降距离 |
 | `vertical.initial_fallback_s` | 10秒 | 未取得有效判底结果时直接开始抓取 |
-| `vertical.ascent_command` | +0.8 | 每次投放后的上潜指令 |
+| `vertical.ascent_command` | +1.0 | 每次投放后的上潜指令 |
 | `vertical.ascent_duration_s` | 2秒 | 每次固定上潜时间 |
-| `vertical.repeat_descent_command` | -0.8 | 后续固定下潜指令 |
+| `vertical.repeat_descent_command` | -1.0 | 后续固定下潜指令 |
 | `vertical.repeat_descent_duration_s` | 5秒 | 后续每次下潜时间 |
-| `route.forward_command` | 0.8 | 蛇形前进控制量 |
+| `route.forward_command` | 1.0 | 蛇形前进控制量 |
 | `route.step_duration_s` | 5秒 | 每次抓取之间的前进段 |
 | `route.steps_per_lane` | 4 | 每带四段，共前进20秒 |
-| `route.shift_command/duration_s` | 0.8 / 4.5秒 | 到带尾后的横移 |
-| `route.turn_command/duration_s` | 0.8 / 11.5秒 | 横移后的转艇 |
+| `route.shift_command/duration_s` | 1.0 / 4.5秒 | 到带尾后的横移 |
+| `route.turn_command/duration_s` | 1.0 / 11.5秒 | 横移后的转艇 |
 
 第一条带使用负方向横移和转向，下一条带使用正方向，之后持续交替。第四个5秒前进段结束后，艇保持离底状态完成横移和转向，再下潜5秒并抓取。
 
@@ -51,7 +51,7 @@ cp ros2_ws/src/rov_competition/config/blind_grab.yaml config/blind_grab.local.ya
 
 ```text
 张爪0.5秒
-→ 前进0.8持续1秒
+→ 前进1.0持续1秒
 → 闭爪0.5秒
 → 机械臂后仰到筐位1.8秒
 → 张爪投放2秒
@@ -71,18 +71,18 @@ S10的1300只作为机械臂水平参考，自动流程不发送该值。当前P
 
 | 状态 | 输出与转换 |
 |---|---|
-| `initial_descent` | 持续发送垂直 `-0.8`。压力深度下降至少0.10米后，在0.05米范围稳定3秒即判底；无深度或未稳定满条件时，第10秒直接进入抓取。 |
+| `initial_descent` | 持续发送垂直 `-1.0`。压力深度下降至少0.10米后，在0.05米范围稳定3秒即判底；无深度或未稳定满条件时，第10秒直接进入抓取。 |
 | `open` | 张爪730、机械臂710，运动归中，等待0.5秒。 |
-| `advance` | 张爪保持730、机械臂保持710，前进0.8持续1秒。 |
+| `advance` | 张爪保持730、机械臂保持710，前进1.0持续1秒。 |
 | `close` | 停艇并闭爪575，等待0.5秒。 |
 | `transfer` | 闭爪保持575，机械臂转到1810，等待1.8秒。 |
 | `release` | 机械臂保持1810，张爪730投放，等待2秒。 |
 | `return` | 张爪保持730，机械臂回710，等待2秒。 |
-| `ascending` | 垂直 `+0.8` 持续2秒。 |
-| `forward` | 前进0.8持续5秒。前三段结束后直接进入定时下潜；第四段后进入横移。 |
-| `shift` | 按当前带方向横移0.8持续4.5秒。 |
-| `turn` | 同方向转艇0.8持续11.5秒，然后切换下一条带。 |
-| `repeat_descent` | 垂直 `-0.8` 持续5秒，再进入下一次抓取。 |
+| `ascending` | 垂直 `+1.0` 持续2秒。 |
+| `forward` | 前进1.0持续5秒。前三段结束后直接进入定时下潜；第四段后进入横移。 |
+| `shift` | 按当前带方向横移1.0持续4.5秒。 |
+| `turn` | 同方向转艇1.0持续11.5秒，然后切换下一条带。 |
+| `repeat_descent` | 垂直 `-1.0` 持续5秒，再进入下一次抓取。 |
 
 程序没有10次上限、批次结束、任务总时限、视觉门槛、最大深度终止或遥测失效终止状态。
 

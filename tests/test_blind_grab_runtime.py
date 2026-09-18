@@ -123,7 +123,7 @@ def test_detection_exception_does_not_skip_initial_descent_or_change_motion():
     )
     assert mission.state is BlindState.INITIAL_DESCENT
     assert output.commands
-    assert all(command.vertical == pytest.approx(-.8) for command, _ in output.commands)
+    assert all(command.vertical == pytest.approx(-1.0) for command, _ in output.commands)
 
 
 def test_many_boxes_and_no_boxes_produce_identical_command_timeline():
