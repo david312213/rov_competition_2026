@@ -43,7 +43,7 @@ ros2 interface show rov_interfaces/msg/NormalizedMotionCommand >/dev/null
 ros2 interface show ros2_topic_forwarding/msg/RobotDataMessage >/dev/null
 
 EXECUTABLES="$(ros2 pkg executables rov_competition)"
-for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_dataset_drive rov_dataset_record rov_field_setup rov_frame_extractor rov_gripper_test rov_turn_test rov_replay rov_stream_bridge rov_search_approach_test rov_cluster_collection_test rov_blind_grab; do
+for REQUIRED in rov_vehicle rov_autonomy rov_axis_test rov_dataset_drive rov_dataset_record rov_field_setup rov_frame_extractor rov_gripper_test rov_turn_test rov_replay rov_stream_bridge rov_search_approach_test rov_cluster_collection_test rov_blind_grab rov_official_data_only; do
   if ! grep -q " ${REQUIRED}$" <<<"${EXECUTABLES}"; then
     echo "缺少 ROS 命令入口: ${REQUIRED}" >&2
     exit 1
@@ -56,7 +56,7 @@ if ! grep -q " topic_forwarding$" <<<"${OFFICIAL_EXECUTABLES}"; then
   exit 1
 fi
 
-for REQUIRED_SCRIPT in start_blind_grab.sh start_blind_grab_team1.sh start_blind_grab_team2.sh set_official_team.sh check_official_ros.sh prepare_blind_grab_old_pc.sh; do
+for REQUIRED_SCRIPT in start_blind_grab.sh start_blind_grab_team1.sh start_blind_grab_team2.sh start_official_data_only.sh start_official_data_only_team1.sh start_official_data_only_team2.sh set_official_team.sh check_official_ros.sh prepare_blind_grab_old_pc.sh; do
   if [[ ! -x "${PROJECT_DIR}/scripts/${REQUIRED_SCRIPT}" ]]; then
     echo "缺少持续盲抓/官方ROS脚本: ${REQUIRED_SCRIPT}" >&2
     exit 1

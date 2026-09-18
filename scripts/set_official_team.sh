@@ -64,6 +64,9 @@ else:
                 return True
         return False
 
+    if not replace_field("enabled", "true"):
+        lines.insert(start + 1, "  enabled: true")
+        end += 1
     if not replace_field("server_ip", '"api.bjetone.com"'):
         lines.insert(start + 1, '  server_ip: "api.bjetone.com"')
         end += 1

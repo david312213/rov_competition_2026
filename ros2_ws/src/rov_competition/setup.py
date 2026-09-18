@@ -42,6 +42,7 @@ setup(
             "rov_direct_motion = rov_competition.direct_motion_console:main",
             "rov_continuous_search = rov_competition.continuous_search_runtime:main",
             "rov_blind_grab = rov_competition.blind_grab_runtime:main",
+            "rov_official_data_only = rov_competition.official_data_only_runtime:main",
             "rov_blind_grab_actuator_test = rov_competition.blind_grab_actuator_console:main",
             "rov_blind_grab_pwm_test = rov_competition.blind_grab_pwm_console:main",
             "rov_vehicle = rov_competition.ros_nodes.vehicle_gateway_node:main",

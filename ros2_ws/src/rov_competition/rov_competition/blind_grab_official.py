@@ -142,15 +142,19 @@ class OfficialRosPublisher:
         mavlink: MavlinkSettings,
         telemetry_source: Callable[[], BlindTelemetrySnapshot],
         *,
+        publish_motion: bool = True,
+        node_name: str = "rov_blind_grab_official_data",
         report: Callable[[str], None] = print,
     ) -> None:
         self.settings = settings
         self.mavlink = mavlink
         self.telemetry_source = telemetry_source
+        self.publish_motion = bool(publish_motion)
+        self.node_name = node_name
         self.report = report
         self.stop_event = threading.Event()
         self.thread = threading.Thread(
-            target=self._run, name="blind-grab-official-ros", daemon=True,
+            target=self._run, name=f"{node_name}-publisher", daemon=True,
         )
         self._lock = threading.Lock()
         self._motion = MotionCommand.neutral()
@@ -160,6 +164,8 @@ class OfficialRosPublisher:
         self._next_telemetry_report_at = 0.0
 
     def set_desired(self, motion: MotionCommand) -> None:
+        if not self.publish_motion:
+            return
         with self._lock:
             self._motion = motion
 
@@ -171,6 +177,29 @@ class OfficialRosPublisher:
         if self.settings.enabled and not self._started:
             self.thread.start()
             self._started = True
+
+    @property
+    def published_topics(self) -> tuple[str, ...]:
+        topics = ("/robot_data", "/imu", "/magnetometer", "/pressure")
+        if self.publish_motion:
+            return ("/cmd_vel", "/cmd_accel", *topics)
+        return topics
+
+    def _create_publishers(self, node: Any, types: dict[str, Any]) -> dict[str, Any]:
+        publishers = {
+            "robot_data": node.create_publisher(types["RobotDataMessage"], "/robot_data", 10),
+            "imu": node.create_publisher(types["Imu"], "/imu", 10),
+            "magnetometer": node.create_publisher(
+                types["MagneticField"], "/magnetometer", 10,
+            ),
+            "pressure": node.create_publisher(types["FluidPressure"], "/pressure", 10),
+        }
+        if self.publish_motion:
+            publishers.update({
+                "cmd_vel": node.create_publisher(types["Twist"], "/cmd_vel", 10),
+                "cmd_accel": node.create_publisher(types["Accel"], "/cmd_accel", 10),
+            })
+        return publishers
 
     @staticmethod
     def _fill_twist(message: Any, values: tuple[float, float, float, float]) -> None:
@@ -263,60 +292,56 @@ class OfficialRosPublisher:
 
     def _run_context(self) -> None:
         import rclpy
-        from geometry_msgs.msg import Accel, Twist
         from rclpy.context import Context
         from rclpy.signals import SignalHandlerOptions
         from ros2_topic_forwarding.msg import RobotDataMessage
         from sensor_msgs.msg import FluidPressure, Imu, MagneticField
+
+        if self.publish_motion:
+            from geometry_msgs.msg import Accel, Twist
 
         context = Context()
         node = None
         try:
             rclpy.init(args=[], context=context, signal_handler_options=SignalHandlerOptions.NO)
             from rclpy.node import Node
-            node = Node("rov_blind_grab_official_data", context=context)
-            publishers = {
-                "cmd_vel": node.create_publisher(Twist, "/cmd_vel", 10),
-                "cmd_accel": node.create_publisher(Accel, "/cmd_accel", 10),
-                "robot_data": node.create_publisher(RobotDataMessage, "/robot_data", 10),
-                "imu": node.create_publisher(Imu, "/imu", 10),
-                "magnetometer": node.create_publisher(MagneticField, "/magnetometer", 10),
-                "pressure": node.create_publisher(FluidPressure, "/pressure", 10),
-            }
+            node = Node(self.node_name, context=context)
             types = {
-                "Twist": Twist,
-                "Accel": Accel,
                 "RobotDataMessage": RobotDataMessage,
                 "Imu": Imu,
                 "MagneticField": MagneticField,
                 "FluidPressure": FluidPressure,
             }
+            if self.publish_motion:
+                types.update({"Twist": Twist, "Accel": Accel})
+            publishers = self._create_publishers(node, types)
             self.ready = True
             self.last_error = ""
-            self.report(
-                "[官方ROS] 已发布 /cmd_vel /cmd_accel /robot_data /imu "
-                "/magnetometer /pressure"
-            )
-            command_period = 1.0 / self.settings.command_rate_hz
+            self.report(f"[官方ROS] 已发布 {' '.join(self.published_topics)}")
             robot_period = 1.0 / self.settings.robot_data_rate_hz
+            loop_period = (
+                1.0 / self.settings.command_rate_hz
+                if self.publish_motion else robot_period
+            )
             previous: tuple[float, float, float, float] | None = None
             previous_at: float | None = None
             next_robot_at = 0.0
             while not self.stop_event.is_set() and context.ok():
                 started = time.monotonic()
-                current = applied_motion(self._desired(), self.mavlink.directions)
-                acceleration = command_acceleration(
-                    current,
-                    previous,
-                    0.0 if previous_at is None else started - previous_at,
-                )
-                twist = Twist()
-                accel = Accel()
-                self._fill_twist(twist, current)
-                self._fill_accel(accel, acceleration)
-                publishers["cmd_vel"].publish(twist)
-                publishers["cmd_accel"].publish(accel)
-                previous, previous_at = current, started
+                if self.publish_motion:
+                    current = applied_motion(self._desired(), self.mavlink.directions)
+                    acceleration = command_acceleration(
+                        current,
+                        previous,
+                        0.0 if previous_at is None else started - previous_at,
+                    )
+                    twist = Twist()
+                    accel = Accel()
+                    self._fill_twist(twist, current)
+                    self._fill_accel(accel, acceleration)
+                    publishers["cmd_vel"].publish(twist)
+                    publishers["cmd_accel"].publish(accel)
+                    previous, previous_at = current, started
                 if started >= next_robot_at:
                     try:
                         snapshot = self.telemetry_source()
@@ -325,22 +350,23 @@ class OfficialRosPublisher:
                         if started >= self._next_telemetry_report_at:
                             self._next_telemetry_report_at = started + 5.0
                             self.report(
-                                f"[官方ROS] 遥测快照读取失败: {exc}；继续发布运动和空值状态"
+                                f"[官方ROS] 遥测快照读取失败: {exc}；继续发布空值状态"
                             )
                     self._publish_robot_data(
                         publishers["robot_data"], RobotDataMessage, snapshot, started,
                     )
                     self._publish_sensor_topics(node, publishers, types, snapshot, started)
                     next_robot_at = started + robot_period
-                self.stop_event.wait(max(0.0, command_period - (time.monotonic() - started)))
+                self.stop_event.wait(max(0.0, loop_period - (time.monotonic() - started)))
 
-            # 平台端最后再看到几帧归中；此处只报告，不参与飞控控制。
-            for _ in range(3):
-                twist = Twist()
-                accel = Accel()
-                publishers["cmd_vel"].publish(twist)
-                publishers["cmd_accel"].publish(accel)
-                time.sleep(0.02)
+            if self.publish_motion:
+                # 平台端最后再看到几帧归中；此处只报告，不参与飞控控制。
+                for _ in range(3):
+                    twist = Twist()
+                    accel = Accel()
+                    publishers["cmd_vel"].publish(twist)
+                    publishers["cmd_accel"].publish(accel)
+                    time.sleep(0.02)
         finally:
             self.ready = False
             if node is not None:
@@ -367,7 +393,7 @@ class OfficialRosPublisher:
                 if now >= next_report_at:
                     next_report_at = now + 5.0
                     try:
-                        self.report(f"[官方ROS] {self.last_error}；盲抓继续，稍后重试")
+                        self.report(f"[官方ROS] {self.last_error}；稍后重试")
                     except Exception:
                         pass
             self.stop_event.wait(self.settings.forwarder_restart_s)
@@ -375,11 +401,12 @@ class OfficialRosPublisher:
     def shutdown(self) -> None:
         if not self.settings.enabled or not self._started:
             return
-        self.set_desired(MotionCommand.neutral())
+        if self.publish_motion:
+            self.set_desired(MotionCommand.neutral())
         self.stop_event.set()
         self.thread.join(timeout=3.0)
         if self.thread.is_alive():
-            self.report("[官方ROS] 发布线程尚未返回；不阻塞盲抓主进程关闭")
+            self.report("[官方ROS] 发布线程尚未返回；不阻塞主进程关闭")
 
 
 class OfficialForwarderSupervisor:
@@ -467,7 +494,7 @@ class OfficialForwarderSupervisor:
                         next_report_at = now + 5.0
                         try:
                             self.report(
-                                f"[官方ROS] {self.last_error}；盲抓继续，转发节点稍后重启"
+                                f"[官方ROS] {self.last_error}；转发节点稍后重启"
                             )
                         except Exception:
                             pass
@@ -496,12 +523,20 @@ class OfficialDataService:
         telemetry_source: Callable[[], BlindTelemetrySnapshot],
         session_directory: Path,
         *,
+        publish_motion: bool = True,
+        node_name: str = "rov_blind_grab_official_data",
         report: Callable[[str], None] = print,
     ) -> None:
         self.settings = settings
+        self.publish_motion = bool(publish_motion)
         self.report = report
         self.publisher = OfficialRosPublisher(
-            settings, mavlink, telemetry_source, report=report,
+            settings,
+            mavlink,
+            telemetry_source,
+            publish_motion=self.publish_motion,
+            node_name=node_name,
+            report=report,
         )
         self.forwarder = OfficialForwarderSupervisor(
             settings,
@@ -519,16 +554,17 @@ class OfficialDataService:
             try:
                 component.start()
             except Exception as exc:
-                self.report(f"[官方ROS] {name}启动失败: {exc}；盲抓继续")
+                self.report(f"[官方ROS] {name}启动失败: {exc}；其他支路继续")
 
     def set_desired(self, motion: MotionCommand, servos: tuple[Any, ...] = ()) -> None:
         del servos
-        self.publisher.set_desired(motion)
+        if self.publish_motion:
+            self.publisher.set_desired(motion)
 
     def shutdown(self) -> None:
         if not self.settings.enabled:
             return
-        # 先让官方平台接收归中，再关闭TCP转发子进程。
+        # 控制模式先让平台接收归中；数据专用模式不会创建运动发布器。
         for name, component in (
             ("话题发布", self.publisher),
             ("TCP转发监督", self.forwarder),

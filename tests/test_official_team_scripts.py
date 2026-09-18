@@ -17,7 +17,7 @@ def test_team_selector_persists_correct_data_and_video_endpoint(tmp_path, team, 
     config = tmp_path / "blind_grab.local.yaml"
     config.write_text(
         "vertical:\n  initial_fallback_s: 10\n"
-        "official_ros:\n  enabled: true\n  server_ip: old.invalid\n  server_port: 40184\n"
+        "official_ros:\n  enabled: false\n  server_ip: old.invalid\n  server_port: 40184\n"
         "vision:\n  start_helpers: false\n",
         encoding="utf-8",
     )
@@ -33,6 +33,7 @@ def test_team_selector_persists_correct_data_and_video_endpoint(tmp_path, team, 
     )
     assert result.returncode == 0, result.stderr
     loaded = yaml.safe_load(config.read_text(encoding="utf-8"))
+    assert loaded["official_ros"]["enabled"] is True
     assert loaded["official_ros"]["server_ip"] == "api.bjetone.com"
     assert loaded["official_ros"]["server_port"] == port
     assert loaded["vertical"]["initial_fallback_s"] == 10
@@ -58,3 +59,22 @@ def test_team_selector_rejects_unknown_team_without_changing_config(tmp_path):
     )
     assert result.returncode == 2
     assert config.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "team,selector",
+    [("1", "start_official_data_only_team1.sh"),
+     ("2", "start_official_data_only_team2.sh")],
+)
+def test_manual_data_team_scripts_select_team_then_start_read_only_entry(team, selector):
+    script = (ROOT / "scripts" / selector).read_text(encoding="utf-8")
+    assert f'set_official_team.sh" {team}' in script
+    assert 'start_official_data_only.sh"' in script
+
+
+def test_manual_data_base_script_never_starts_blind_grab_or_vehicle_gateway():
+    script = (ROOT / "scripts/start_official_data_only.sh").read_text(encoding="utf-8")
+    assert "official_data_only_runtime" in script
+    assert "blind_grab_runtime" not in script
+    assert "rov_vehicle" not in script
+    assert "rov_autonomy" not in script

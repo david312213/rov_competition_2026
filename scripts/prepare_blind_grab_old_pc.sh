@@ -10,7 +10,8 @@ cd "${PROJECT_DIR}"
 chmod +x scripts/install.sh scripts/check.sh scripts/check_ros.sh \
   scripts/check_official_ros.sh scripts/start_blind_grab.sh \
   scripts/set_official_team.sh scripts/start_blind_grab_team1.sh \
-  scripts/start_blind_grab_team2.sh \
+  scripts/start_blind_grab_team2.sh scripts/start_official_data_only.sh \
+  scripts/start_official_data_only_team1.sh scripts/start_official_data_only_team2.sh \
   scripts/test_arm_gripper.sh scripts/tune_arm_gripper_pwm.sh \
   scripts/apply_corrected_pwm_direction.sh scripts/prepare_blind_grab_old_pc.sh
 mkdir -p config
@@ -35,6 +36,11 @@ cat <<EOF
   一队（40198）：cd "${PROJECT_DIR}" && ./scripts/start_blind_grab_team1.sh
   二队（ddhyzx2，40197）：cd "${PROJECT_DIR}" && ./scripts/start_blind_grab_team2.sh
 
+QGC/手柄人工驾驶、只上传主办方数据：
+  一队（40198）：cd "${PROJECT_DIR}" && ./scripts/start_official_data_only_team1.sh
+  二队（ddhyzx2，40197）：cd "${PROJECT_DIR}" && ./scripts/start_official_data_only_team2.sh
+
 启动后另开终端检查官方计分数据：
-  cd "${PROJECT_DIR}" && ./scripts/check_official_ros.sh --live
+  盲抓：cd "${PROJECT_DIR}" && ./scripts/check_official_ros.sh --live
+  手柄：cd "${PROJECT_DIR}" && ./scripts/check_official_ros.sh --live-manual
 EOF

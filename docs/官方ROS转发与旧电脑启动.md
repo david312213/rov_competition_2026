@@ -1,6 +1,6 @@
 # 官方 ROS 转发与旧电脑启动
 
-本工程已纳入比赛方提供的 `ros2_topic_forwarding` ROS 2 包，并由持续盲抓入口自动管理。比赛方文档和源码只作为接口依据；盲抓状态、动作和故障策略仍以本工程配置为准。
+本工程已纳入比赛方提供的 `ros2_topic_forwarding` ROS 2 包。持续盲抓入口和QGC/手柄人工驾驶的数据专用入口都能管理该官方转发节点。
 
 ## 已接入的数据
 
@@ -29,6 +29,34 @@
 二队是当前默认值。正式启动应使用对应的队伍脚本，脚本会先同步 `config/blind_grab.local.yaml`，避免旧电脑仍使用历史端口40184。
 
 官方数据发布线程、TCP转发节点、视频推流和盲抓控制互相独立。ROS初始化失败、服务器断线、视频失败或官方节点退出时会记录并重试，不会取消或暂停盲抓。
+
+## QGC/手柄人工驾驶，只上传主办方数据
+
+当前二队 `ddhyzx2` 的一键命令是：
+
+```bash
+cd /home/persica/rov_competition_2026
+./scripts/start_official_data_only_team2.sh
+```
+
+一队使用：
+
+```bash
+./scripts/start_official_data_only_team1.sh
+```
+
+QGC继续使用BlueOS发往14550的MAVLink，数据进程只监听BlueOS发往14551的副路。它只调用非阻塞接收并解析遥测，不发送 `MANUAL_CONTROL`、RC override、舵机、解锁、模式或心跳报文；关闭时也只关闭本地接收连接。它不启动盲抓、飞控网关、视频、YOLO、录像或RTMP。
+
+数据专用节点固定发布 `/robot_data`，并在收到相应真实遥测时发布 `/imu`、`/magnetometer`、`/pressure`。官方C++节点也会订阅系统中已有的 `/joy`、`/cmd_vel`、`/cmd_accel` 并原样转发；如果手柄只在QGC内部使用而没有ROS手柄节点，这三个ROS话题可能没有数据，程序不会伪造它们。
+
+启动后另开终端检查：
+
+```bash
+cd /home/persica/rov_competition_2026
+./scripts/check_official_ros.sh --live-manual
+```
+
+人工模式只强制要求 `/robot_data`、数据专用节点、官方转发节点和到队伍端口的TCP连接。其余话题逐项显示当前是否收到真实数据。
 
 ## 旧电脑首次更新
 
@@ -78,6 +106,12 @@ cd /home/persica/rov_competition_2026 && ./scripts/check_official_ros.sh --live
 
 必须看到 `/cmd_vel`、`/cmd_accel`、`/robot_data` 三个固定话题都在发布、`/topic_forwarding` 节点存在，并且到所选队伍端口的 TCP 状态为 `ESTABLISHED`。`/imu`、`/magnetometer`、`/pressure` 和 `/joy` 会逐项报告当前是否有真实来源。该检查通过表示本机发布与官方 TCP 链路正常；最终平台是否入库仍以裁判平台页面显示为准。
 
+手柄人工驾驶的数据专用入口改用：
+
+```bash
+cd /home/persica/rov_competition_2026 && ./scripts/check_official_ros.sh --live-manual
+```
+
 官方转发日志保存在本次会话目录的 `official_ros_forwarder.log`。主终端会打印该目录路径。
 
 ## 只检查配置
@@ -86,6 +120,7 @@ cd /home/persica/rov_competition_2026 && ./scripts/check_official_ros.sh --live
 
 ```bash
 ./scripts/start_blind_grab.sh --dry-run
+./scripts/start_official_data_only.sh --dry-run
 ```
 
 离线检查官方包是否已经正确构建：

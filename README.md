@@ -7,6 +7,7 @@
 需要手动试PWM时运行 `./scripts/tune_arm_gripper_pwm.sh`，先选 `a/b/c/d`，再输入PWM数字。
 PWM已按实艇标定更新为夹爪575闭/730开、机械臂710垂直抓取/1810后仰（1300水平参考）；旧电脑拉取后运行 `./scripts/apply_corrected_pwm_direction.sh` 同步本机配置。
 比赛方 `ros2_topic_forwarding` 已纳入同一工作空间并由该入口自动启动；旧电脑首次更新、一键启动和计分链路检查见[官方ROS转发与旧电脑启动](docs/官方ROS转发与旧电脑启动.md)。
+如果改用 QGC 和手柄人工驾驶，二队直接运行 `./scripts/start_official_data_only_team2.sh`，一队运行 `./scripts/start_official_data_only_team1.sh`。这个入口只读14551上的MAVLink遥测并向主办方转发ROS数据，不启动盲抓、视频或YOLO，也不向飞控发送运动、舵机、解锁、模式、RC覆盖或心跳报文。
 
 以下为原有任务入口及其说明。
 
