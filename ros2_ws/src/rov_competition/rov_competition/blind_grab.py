@@ -38,14 +38,14 @@ class BlindGrabConfig:
     arm_to_basket: ServoAction
     arm_to_grasp: ServoAction
     release_duration_s: float
-    initial_descent_command: float = -0.415
+    initial_descent_command: float = -0.8
     initial_bottom_stable_s: float = 3.0
     initial_bottom_tolerance_m: float = 0.05
     initial_minimum_descent_m: float = 0.10
     initial_fallback_s: float = 10.0
-    ascent_command: float = 0.415
+    ascent_command: float = 0.8
     ascent_duration_s: float = 2.0
-    repeat_descent_command: float = -0.415
+    repeat_descent_command: float = -0.8
     repeat_descent_duration_s: float = 5.0
     route_forward_command: float = 0.23
     route_step_duration_s: float = 5.0

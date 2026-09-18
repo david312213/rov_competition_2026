@@ -37,14 +37,14 @@ def fallback_to_first_grab(mission: BlindGrabMission, start: float = 0.0) -> flo
 def config_document():
     return {
         "vertical": {
-            "initial_descent_command": -0.415,
+            "initial_descent_command": -0.8,
             "initial_bottom_stable_s": 3.0,
             "initial_bottom_tolerance_m": 0.05,
             "initial_minimum_descent_m": 0.10,
             "initial_fallback_s": 10.0,
-            "ascent_command": 0.415,
+            "ascent_command": 0.8,
             "ascent_duration_s": 2.0,
-            "repeat_descent_command": -0.415,
+            "repeat_descent_command": -0.8,
             "repeat_descent_duration_s": 5.0,
         },
         "route": {

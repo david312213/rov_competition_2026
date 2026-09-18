@@ -1,20 +1,21 @@
 # 永久沉底蛇形盲抓入口的参数模板。
-# 当前已写入2026-09-17实艇标定的臂爪通道、PWM和动作时间。
+# 当前已写入2026-09-17实艇标定的臂爪通道、PWM和动作时间，
+# 以及2026-09-18指定的0.8升沉功率。
 # 复制到根目录 config/blind_grab.local.yaml 后可按现场距离微调时间。
 # 启动前由操作员设置飞控模式并解锁；启动后立即下潜。
 
 vertical:
   # 首次启动：持续下潜，压力深度稳定3秒即判底；10秒仍未确认也直接抓取。
-  initial_descent_command: -0.415
+  initial_descent_command: -0.80
   initial_bottom_stable_s: 3.0
   initial_bottom_tolerance_m: 0.05
   initial_minimum_descent_m: 0.10
   initial_fallback_s: 10.0
   # 每次投放后固定上潜2秒，再沿蛇形移动。
-  ascent_command: 0.415
+  ascent_command: 0.80
   ascent_duration_s: 2.0
   # 除第一次外，每次移动结束后固定下潜5秒。
-  repeat_descent_command: -0.415
+  repeat_descent_command: -0.80
   repeat_descent_duration_s: 5.0
 
 route:

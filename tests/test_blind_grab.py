@@ -41,7 +41,7 @@ def test_start_immediately_descends_with_open_claw_and_arm_at_grasp_pose():
     c = config()
     decision = BlindGrabMission(c).step(0.0)
     assert decision.state is BlindState.INITIAL_DESCENT
-    assert decision.motion.vertical == pytest.approx(-0.415)
+    assert decision.motion.vertical == pytest.approx(-0.8)
     assert decision.servos == c.open_gripper.outputs + c.arm_to_grasp.outputs
     assert decision.bottom_source == "pending"
 
@@ -103,7 +103,7 @@ def test_one_grab_runs_all_six_phases_then_ascends_for_two_seconds():
     assert states[5].servos == c.open_gripper.outputs + c.arm_to_grasp.outputs
     ascending = states[-1]
     assert ascending.state is BlindState.ASCENDING
-    assert ascending.motion.vertical == pytest.approx(.415)
+    assert ascending.motion.vertical == pytest.approx(.8)
     assert ascending.completed_cycles == 1
     assert ascending.grasp_command_count == 1
 
@@ -129,7 +129,7 @@ def test_each_normal_cycle_ascends_moves_five_seconds_and_descends_five_seconds(
     now, decision = advance_one_phase(mission, now)
     assert decision.state is BlindState.REPEAT_DESCENT
     assert decision.segment_in_lane == 1
-    assert decision.motion.vertical == pytest.approx(-.415)
+    assert decision.motion.vertical == pytest.approx(-.8)
     now, decision = advance_one_phase(mission, now)
     assert decision.state is BlindState.GRABBING
     assert decision.phase == "open"

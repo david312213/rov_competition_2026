@@ -19,14 +19,14 @@ def save(tmp_path, document):
 def test_vehicle_template_contains_permanent_dive_route_and_action_timing():
     config = load_blind_grab_config(package_config_path("blind_grab.yaml"))
     mission = config.mission
-    assert mission.initial_descent_command == pytest.approx(-.415)
+    assert mission.initial_descent_command == pytest.approx(-.8)
     assert mission.initial_bottom_stable_s == 3
     assert mission.initial_bottom_tolerance_m == pytest.approx(.05)
     assert mission.initial_minimum_descent_m == pytest.approx(.10)
     assert mission.initial_fallback_s == 10
-    assert mission.ascent_command == pytest.approx(.415)
+    assert mission.ascent_command == pytest.approx(.8)
     assert mission.ascent_duration_s == 2
-    assert mission.repeat_descent_command == pytest.approx(-.415)
+    assert mission.repeat_descent_command == pytest.approx(-.8)
     assert mission.repeat_descent_duration_s == 5
     assert mission.route_forward_command == pytest.approx(.23)
     assert mission.route_step_duration_s == 5
@@ -99,7 +99,7 @@ def test_legacy_local_config_without_new_sections_gets_new_defaults(tmp_path):
     document["grab"]["grabs_per_batch"] = 10
     loaded = load_blind_grab_config(save(tmp_path, document))
     mission = loaded.mission
-    assert mission.initial_descent_command == pytest.approx(-.415)
+    assert mission.initial_descent_command == pytest.approx(-.8)
     assert mission.initial_fallback_s == 10
     assert mission.ascent_duration_s == 2
     assert mission.repeat_descent_duration_s == 5

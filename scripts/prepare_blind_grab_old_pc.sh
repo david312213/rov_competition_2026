@@ -13,7 +13,8 @@ chmod +x scripts/install.sh scripts/check.sh scripts/check_ros.sh \
   scripts/start_blind_grab_team2.sh scripts/start_official_data_only.sh \
   scripts/start_official_data_only_team1.sh scripts/start_official_data_only_team2.sh \
   scripts/test_arm_gripper.sh scripts/tune_arm_gripper_pwm.sh \
-  scripts/apply_corrected_pwm_direction.sh scripts/prepare_blind_grab_old_pc.sh
+  scripts/apply_corrected_pwm_direction.sh scripts/apply_blind_grab_power_08.sh \
+  scripts/prepare_blind_grab_old_pc.sh
 mkdir -p config
 if [[ ! -r "${LOCAL_CONFIG}" ]]; then
   cp "${TEMPLATE}" "${LOCAL_CONFIG}"
@@ -28,6 +29,7 @@ else
 fi
 
 ./scripts/install.sh
+./scripts/apply_blind_grab_power_08.sh
 ./scripts/check_official_ros.sh --offline
 
 cat <<EOF

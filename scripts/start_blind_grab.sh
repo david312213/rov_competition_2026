@@ -18,6 +18,7 @@ CONFIG="${PROJECT_DIR}/config/blind_grab.local.yaml"
 if [[ ! -f "${CONFIG}" ]]; then
   CONFIG="${PROJECT_DIR}/ros2_ws/src/rov_competition/config/blind_grab.yaml"
 fi
+"${SCRIPT_DIR}/apply_blind_grab_power_08.sh" --config "${CONFIG}"
 cd "${PROJECT_DIR}"
 if command -v ros2 >/dev/null 2>&1; then
   if ! ros2 pkg executables ros2_topic_forwarding 2>/dev/null | grep -q ' topic_forwarding$'; then

@@ -173,7 +173,7 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
         arm_to_basket=action("arm_to_basket"), arm_to_grasp=action("arm_to_grasp"),
         release_duration_s=number(grasp.get("release_duration_s"), "grab.release_duration_s"),
         initial_descent_command=power(
-            vertical.get("initial_descent_command", -0.415),
+            vertical.get("initial_descent_command", -0.8),
             "vertical.initial_descent_command",
         ),
         initial_bottom_stable_s=number(
@@ -193,13 +193,13 @@ def load_blind_grab_config(path: str | Path) -> BlindGrabAppConfig:
             "vertical.initial_fallback_s",
         ),
         ascent_command=power(
-            vertical.get("ascent_command", 0.415), "vertical.ascent_command",
+            vertical.get("ascent_command", 0.8), "vertical.ascent_command",
         ),
         ascent_duration_s=number(
             vertical.get("ascent_duration_s", 2.0), "vertical.ascent_duration_s",
         ),
         repeat_descent_command=power(
-            vertical.get("repeat_descent_command", -0.415),
+            vertical.get("repeat_descent_command", -0.8),
             "vertical.repeat_descent_command",
         ),
         repeat_descent_duration_s=number(

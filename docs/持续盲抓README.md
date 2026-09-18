@@ -28,14 +28,14 @@ cp ros2_ws/src/rov_competition/config/blind_grab.yaml config/blind_grab.local.ya
 
 | 参数 | 当前值 | 行为 |
 |---|---:|---|
-| `vertical.initial_descent_command` | -0.415 | 启动后立即下潜 |
+| `vertical.initial_descent_command` | -0.8 | 启动后立即下潜 |
 | `vertical.initial_bottom_stable_s` | 3秒 | 深度平台持续时间 |
 | `vertical.initial_bottom_tolerance_m` | 0.05米 | 平台窗口内允许的深度波动 |
 | `vertical.initial_minimum_descent_m` | 0.10米 | 压力判底前至少下降距离 |
 | `vertical.initial_fallback_s` | 10秒 | 未取得有效判底结果时直接开始抓取 |
-| `vertical.ascent_command` | +0.415 | 每次投放后的上潜指令 |
+| `vertical.ascent_command` | +0.8 | 每次投放后的上潜指令 |
 | `vertical.ascent_duration_s` | 2秒 | 每次固定上潜时间 |
-| `vertical.repeat_descent_command` | -0.415 | 后续固定下潜指令 |
+| `vertical.repeat_descent_command` | -0.8 | 后续固定下潜指令 |
 | `vertical.repeat_descent_duration_s` | 5秒 | 后续每次下潜时间 |
 | `route.forward_command` | 0.23 | 蛇形前进控制量 |
 | `route.step_duration_s` | 5秒 | 每次抓取之间的前进段 |
@@ -71,18 +71,18 @@ S10的1300只作为机械臂水平参考，自动流程不发送该值。当前P
 
 | 状态 | 输出与转换 |
 |---|---|
-| `initial_descent` | 持续发送垂直 `-0.415`。压力深度下降至少0.10米后，在0.05米范围稳定3秒即判底；无深度或未稳定满条件时，第10秒直接进入抓取。 |
+| `initial_descent` | 持续发送垂直 `-0.8`。压力深度下降至少0.10米后，在0.05米范围稳定3秒即判底；无深度或未稳定满条件时，第10秒直接进入抓取。 |
 | `open` | 张爪730、机械臂710，运动归中，等待0.5秒。 |
 | `advance` | 张爪保持730、机械臂保持710，前进0.23持续1秒。 |
 | `close` | 停艇并闭爪575，等待0.5秒。 |
 | `transfer` | 闭爪保持575，机械臂转到1810，等待1.8秒。 |
 | `release` | 机械臂保持1810，张爪730投放，等待2秒。 |
 | `return` | 张爪保持730，机械臂回710，等待2秒。 |
-| `ascending` | 垂直 `+0.415` 持续2秒。 |
+| `ascending` | 垂直 `+0.8` 持续2秒。 |
 | `forward` | 前进0.23持续5秒。前三段结束后直接进入定时下潜；第四段后进入横移。 |
 | `shift` | 按当前带方向横移0.20持续4.5秒。 |
 | `turn` | 同方向转艇0.20持续11.5秒，然后切换下一条带。 |
-| `repeat_descent` | 垂直 `-0.415` 持续5秒，再进入下一次抓取。 |
+| `repeat_descent` | 垂直 `-0.8` 持续5秒，再进入下一次抓取。 |
 
 程序没有10次上限、批次结束、任务总时限、视觉门槛、最大深度终止或遥测失效终止状态。
 

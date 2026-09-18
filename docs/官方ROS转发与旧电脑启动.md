@@ -58,6 +58,19 @@ cd /home/persica/rov_competition_2026
 
 人工模式只强制要求 `/robot_data`、数据专用节点、官方转发节点和到队伍端口的TCP连接。其余话题逐项显示当前是否收到真实数据。
 
+## 新电脑首次下载完整公开代码
+
+公开仓库的默认 `main` 同时包含永久盲抓和人工驾驶数据上传。Ubuntu 22.04且已安装ROS 2 Humble的电脑执行：
+
+```bash
+cd ~
+git clone https://github.com/david312213/rov_competition_2026.git
+cd rov_competition_2026
+./scripts/install.sh
+```
+
+二队盲抓使用 `./scripts/start_blind_grab_team2.sh`，二队手柄人工驾驶只上传数据使用 `./scripts/start_official_data_only_team2.sh`。一队把脚本名中的 `team2` 改为 `team1`。
+
 ## 旧电脑首次更新
 
 旧电脑要求 Ubuntu 22.04 和 ROS 2 Humble。已有工程时：
